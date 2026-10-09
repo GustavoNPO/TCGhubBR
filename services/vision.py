@@ -2,7 +2,7 @@ import base64
 import os
 
 from io import BytesIO
-from typing import Optional
+from typing import Optional, Literal
 
 from dotenv import load_dotenv
 from google import genai
@@ -14,38 +14,72 @@ load_dotenv()
 
 
 class CardExtraction(BaseModel):
-    name: Optional[str] = Field(
-        default=None,
-        description="Exact card name printed near the top of the card."
+
+    game: Literal[
+        "pokemon",
+        "magic",
+        "digimon",
+        "starwars",
+        "unknown"
+    ] = Field(
+        description="Trading card game detected from the card."
     )
 
-    number: Optional[str] = Field(
+    printed_name: Optional[str] = Field(
         default=None,
-        description="Printed collector number, for example 125/197."
+        description=(
+            "Exact card name as printed on the physical card."
+        )
+    )
+
+    search_name: Optional[str] = Field(
+        default=None,
+        description=(
+            "Canonical English name of the card if it can be "
+            "confidently derived from the printed name. "
+            "Do not infer it only from the artwork."
+        )
+    )
+
+    collector_number: Optional[str] = Field(
+        default=None,
+        description=(
+            "Collector number exactly as printed. "
+            "Examples: 025/165, BT14-001, 123."
+        )
     )
 
     local_id: Optional[str] = Field(
         default=None,
-        description="The number before the slash. Example: 125 from 125/197."
+        description=(
+            "Main identifying number of the card. "
+            "For 025/165 return 025."
+        )
     )
 
-    set_name: Optional[str] = Field(
-        default=None,
-        description="Set name, only when readable from the card."
-    )
-
-    hp: Optional[int] = Field(
-        default=None,
-        description="Printed HP value if visible."
-    )
-
-    language: Optional[str] = Field(
-        default=None,
-        description="Card language, for example pt-br, en, es or ja."
+    language: Literal[
+        "en",
+        "pt-br",
+        "es",
+        "fr",
+        "de",
+        "it",
+        "ja",
+        "ko",
+        "zh-tw",
+        "zh-cn",
+        "unknown"
+    ] = Field(
+        description="Language printed on the card."
     )
 
     confidence: float = Field(
-        description="Confidence between 0 and 1 in the extracted identifying data."
+        ge=0,
+        le=1,
+        description=(
+            "Confidence from 0 to 1 that the identifying "
+            "information was read correctly."
+        )
     )
 
 
@@ -53,42 +87,89 @@ client = genai.Client()
 
 
 PROMPT = """
-You are reading a physical Pokemon Trading Card Game card.
+You are analyzing a photograph of a physical trading card.
 
-Your job is TEXT EXTRACTION, not guessing the card from the artwork.
+Your job is to extract identifying information from the card.
 
-Read only information that is visible in the image.
+SUPPORTED GAMES:
 
-The most important fields are:
+- pokemon
+- magic
+- digimon
+- starwars
+- unknown
 
-1. Exact printed card name
-2. Collector number, normally near the bottom of the card
-3. Card language
-4. HP
-5. Set name if it is explicitly readable
+SUPPORTED LANGUAGES:
 
-For example:
+- en
+- pt-br
+- es
+- fr
+- de
+- it
+- ja
+- ko
+- zh-tw
+- zh-cn
+- unknown
 
-If the card contains:
 
-Charizard
-180 HP
-125/197
+IMPORTANT RULES:
 
-return:
+1. Determine which trading card game the card belongs to.
 
-name: Charizard
-number: 125/197
-local_id: 125
-hp: 180
+2. Read the exact card name printed on the card.
 
-IMPORTANT:
+3. Detect the language printed on the card.
 
-- Do not identify a Pokemon only from its artwork.
-- Do not invent unreadable information.
-- If something cannot be read, return null.
-- local_id is the portion before "/" in the collector number.
-- confidence must represent how confident you are that the identifying text was read correctly.
+4. Read the collector/card number when visible.
+
+5. If the printed name is not English, provide the canonical
+English name in search_name ONLY when you are confident that it
+can be derived from the printed name.
+
+6. Do NOT identify a card only from the artwork.
+
+7. Do NOT invent unreadable information.
+
+8. Do NOT extract HP, attack damage, defense, mana cost,
+power or other gameplay statistics.
+
+9. confidence must represent how confident you are that the
+identifying information was correctly read.
+
+Examples:
+
+A Pokemon card showing:
+
+Pikachu
+025/165
+
+should produce information equivalent to:
+
+game: pokemon
+printed_name: Pikachu
+search_name: Pikachu
+collector_number: 025/165
+local_id: 025
+language: en
+
+
+A Japanese Pokemon card showing:
+
+リザードン
+006/165
+
+may produce:
+
+game: pokemon
+printed_name: リザードン
+search_name: Charizard
+collector_number: 006/165
+local_id: 006
+language: ja
+
+Only provide search_name when you are confident about it.
 """
 
 

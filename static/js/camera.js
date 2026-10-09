@@ -106,36 +106,145 @@ function showResult(data) {
     const detected = data.detected;
 
     let html = `
-        <h2>Texto identificado</h2>
+    <h2>Carta identificada</h2>
 
-        <p>
-            <strong>Nome:</strong>
-            ${detected.name ?? "Não identificado"}
-        </p>
+    <p>
+        <strong>TCG:</strong>
+        ${detected.game}
+    </p>
 
-        <p>
-            <strong>Número:</strong>
-            ${detected.number ?? "Não identificado"}
-        </p>
+    <p>
+        <strong>Nome:</strong>
+        ${detected.printed_name ?? "Não identificado"}
+    </p>
 
-        <p>
-            <strong>HP:</strong>
-            ${detected.hp ?? "Não identificado"}
-        </p>
+    <p>
+        <strong>Número:</strong>
+        ${detected.collector_number ?? "Não identificado"}
+    </p>
 
-        <p>
-            <strong>Idioma:</strong>
-            ${detected.language ?? "Não identificado"}
-        </p>
+    <p>
+        <strong>Idioma:</strong>
+        ${detected.language}
+    </p>
+`;
+    if (data.status === "retry") {
 
-        <p>
-            <strong>Confiança:</strong>
-            ${Math.round(
-                detected.confidence * 100
-            )}%
-        </p>
+        result.innerHTML = `
+        <div class="scan-message">
+
+            <h2>
+                Vamos tentar novamente
+            </h2>
+
+            <p>
+                ${data.message}
+            </p>
+
+        </div>
     `;
 
+        return;
+    }
+
+    if (data.status === "game_detected") {
+
+        result.innerHTML = `
+        <div class="scan-message">
+
+            <h2>
+                TCG identificado!
+            </h2>
+
+            <p>
+                ${data.message}
+            </p>
+
+            <p>
+                <strong>Carta:</strong>
+                ${data.detected.printed_name
+            ?? "Nome não identificado"
+            }
+            </p>
+
+            <p>
+                <strong>Idioma:</strong>
+                ${data.detected.language}
+            </p>
+
+        </div>
+    `;
+
+        return;
+    }
+
+    if (data.status === "ok") {
+
+        let html = `
+        <h2>
+            Encontramos sua carta
+        </h2>
+
+        <div class="candidates">
+    `;
+
+
+        for (const card of data.candidates) {
+
+            const imageUrl =
+                card.image
+                    ? `${card.image}/high.webp`
+                    : "";
+
+
+            html += `
+            <div class="candidate">
+
+                ${imageUrl
+                    ? `
+                            <img
+                                src="${imageUrl}"
+                                alt="${card.name}"
+                            >
+                        `
+                    : ""
+                }
+
+                <h3>
+                    ${card.name}
+                </h3>
+
+                <p>
+                    #${card.local_id}
+                </p>
+
+                <button
+                    type="button"
+                    class="confirm-card"
+                    data-card-id="${card.id}"
+                >
+                    É esta
+                </button>
+
+            </div>
+        `;
+        }
+
+
+        html += `
+        </div>
+
+        <button
+            type="button"
+            onclick="location.reload()"
+        >
+            Nenhuma dessas
+        </button>
+    `;
+
+
+        result.innerHTML = html;
+    }
 
     if (data.candidates.length > 0) {
 
@@ -149,24 +258,23 @@ function showResult(data) {
 
             const imageUrl =
                 card.image
-                ? `${card.image}/low.webp`
-                : "";
+                    ? `${card.image}/low.webp`
+                    : "";
 
             html += `
                 <div class="candidate">
 
-                    ${
-                        imageUrl
-                        ?
-                        `
+                    ${imageUrl
+                    ?
+                    `
                         <img
                             src="${imageUrl}"
                             alt="${card.name}"
                         >
                         `
-                        :
-                        ""
-                    }
+                    :
+                    ""
+                }
 
                     <h3>
                         ${card.name}
