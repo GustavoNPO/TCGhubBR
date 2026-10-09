@@ -1,0 +1,6 @@
+Flask
+python-dotenv
+requests
+google-genai
+pydantic
+Pillow

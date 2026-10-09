@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+
+<html lang="pt-BR">
+
+<head>
+    <meta charset="UTF-8">
+
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>TCG Hub</title>
+
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+
+<body>
+
+    <main class="container">
+
+        <h1>TCG Hub</h1>
+
+        <p>
+            Tire uma foto da sua carta.
+        </p>
+
+        <form id="scan-form" enctype="multipart/form-data">
+
+            <label class="camera-button">
+
+                Abrir câmera
+
+                <input id="card-camera" name="card" type="file" accept="image/*" capture="environment" required>
+
+            </label>
+
+            <div id="preview-container" class="preview-container">
+
+                <img id="preview" alt="Preview da carta">
+
+            </div>
+
+            <button id="scan-button" type="submit" disabled>
+                Identificar carta
+            </button>
+
+        </form>
+
+
+        <div id="result"></div>
+
+
+
+    </main>
+
+    <script src="{{ url_for('static', filename='js/camera.js') }}"></script>
+
+</body>
+
+</html>
