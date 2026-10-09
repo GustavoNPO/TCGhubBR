@@ -220,7 +220,8 @@ def find_card_candidates(card_info):
 
 
     return candidates
-    def select_best_candidates(
+
+def select_best_candidates(
     candidates,
     scan_confidence
 ):
