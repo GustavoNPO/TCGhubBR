@@ -1,308 +1,153 @@
-const cameraInput =
-    document.querySelector("#card-camera");
+const cameraInput = document.querySelector("#card-camera");
+const preview = document.querySelector("#preview");
+const previewContainer = document.querySelector("#preview-container");
+const form = document.querySelector("#scan-form");
+const scanButton = document.querySelector("#scan-button");
+const result = document.querySelector("#result");
+let previewUrl;
+let busy = false;
 
-const preview =
-    document.querySelector("#preview");
+function setBusy(value) {
+    busy = value;
+    cameraInput.disabled = value;
+    scanButton.disabled = value || !cameraInput.files[0];
+    result.querySelectorAll("button").forEach((button) => {
+        button.disabled = value;
+    });
+}
 
-const previewContainer =
-    document.querySelector("#preview-container");
-
-const form =
-    document.querySelector("#scan-form");
-
-const scanButton =
-    document.querySelector("#scan-button");
-
-const result =
-    document.querySelector("#result");
-
+// textContent mantém nomes e mensagens externos como texto.
+function element(tag, text, className) {
+    const node = document.createElement(tag);
+    if (text !== undefined) node.textContent = text;
+    if (className) node.className = className;
+    return node;
+}
 
 cameraInput.addEventListener("change", () => {
-
     const file = cameraInput.files[0];
-
+    if (previewUrl) URL.revokeObjectURL(previewUrl);
+    result.replaceChildren();
     if (!file) {
+        preview.removeAttribute("src");
+        previewContainer.classList.remove("visible");
+        scanButton.disabled = true;
         return;
     }
-
-    preview.src = URL.createObjectURL(file);
-
+    previewUrl = URL.createObjectURL(file);
+    preview.src = previewUrl;
     previewContainer.classList.add("visible");
-
     scanButton.disabled = false;
 });
 
-
 form.addEventListener("submit", async (event) => {
-
     event.preventDefault();
-
     const file = cameraInput.files[0];
+    if (!file || busy) return;
 
-    if (!file) {
-        return;
-    }
-
-    scanButton.disabled = true;
-
-    scanButton.textContent =
-        "Identificando...";
-
-    result.innerHTML =
-        "<p>Analisando carta...</p>";
-
-
+    setBusy(true);
+    scanButton.textContent = "Identificando...";
+    result.replaceChildren(element("p", "Analisando carta..."));
     const formData = new FormData();
-
-    formData.append(
-        "card",
-        file
-    );
-
+    formData.append("card", file);
 
     try {
-
-        const response = await fetch(
-            "/scan",
-            {
-                method: "POST",
-                body: formData
-            }
-        );
-
+        const response = await fetch("/scan", { method: "POST", body: formData });
         const data = await response.json();
-
-        console.log(data);
-
-        if (!response.ok) {
-            throw new Error(
-                data.error || "Erro desconhecido"
-            );
-        }
-
+        if (!response.ok) throw new Error(data.error || "Não foi possível analisar a carta.");
         showResult(data);
-
     } catch (error) {
-
-        result.innerHTML = `
-            <p>
-                Erro: ${error.message}
-            </p>
-        `;
-
+        result.replaceChildren(element("p", `Erro: ${error.message}`, "error-message"));
     } finally {
-
-        scanButton.disabled = false;
-
-        scanButton.textContent =
-            "Identificar carta";
+        setBusy(false);
+        scanButton.textContent = "Identificar carta";
     }
-
 });
 
-
 function showResult(data) {
-
-    const detected = data.detected;
-
-    let html = `
-    <h2>Carta identificada</h2>
-
-    <p>
-        <strong>TCG:</strong>
-        ${detected.game}
-    </p>
-
-    <p>
-        <strong>Nome:</strong>
-        ${detected.printed_name ?? "Não identificado"}
-    </p>
-
-    <p>
-        <strong>Número:</strong>
-        ${detected.collector_number ?? "Não identificado"}
-    </p>
-
-    <p>
-        <strong>Idioma:</strong>
-        ${detected.language}
-    </p>
-`;
-    if (data.status === "retry") {
-
-        result.innerHTML = `
-        <div class="scan-message">
-
-            <h2>
-                Vamos tentar novamente
-            </h2>
-
-            <p>
-                ${data.message}
-            </p>
-
-        </div>
-    `;
-
+    result.replaceChildren();
+    if (data.status === "retry" || data.status === "game_detected") {
+        const message = element("div", undefined, "scan-message");
+        message.append(
+            element("h2", data.status === "retry" ? "Vamos tentar novamente" : "TCG identificado!"),
+            element("p", data.message)
+        );
+        if (data.status === "game_detected") {
+            message.append(element("p", `Carta: ${data.detected.printed_name ?? "Nome não identificado"}`));
+        }
+        result.append(message);
+        return;
+    }
+    if (data.status !== "ok") {
+        result.append(element("p", data.error || "Não foi possível identificar a carta.", "error-message"));
         return;
     }
 
-    if (data.status === "game_detected") {
+    result.append(element("h2", "Encontramos sua carta"));
+    result.append(element("p", "Confirme a carta para adicioná-la ao inventário."));
+    const candidates = element("div", undefined, "candidates");
+    const feedback = element("p", "", "save-feedback");
+    feedback.setAttribute("role", "status");
 
-        result.innerHTML = `
-        <div class="scan-message">
-
-            <h2>
-                TCG identificado!
-            </h2>
-
-            <p>
-                ${data.message}
-            </p>
-
-            <p>
-                <strong>Carta:</strong>
-                ${data.detected.printed_name
-            ?? "Nome não identificado"
-            }
-            </p>
-
-            <p>
-                <strong>Idioma:</strong>
-                ${data.detected.language}
-            </p>
-
-        </div>
-    `;
-
-        return;
-    }
-
-    if (data.status === "ok") {
-
-        let html = `
-        <h2>
-            Encontramos sua carta
-        </h2>
-
-        <div class="candidates">
-    `;
-
-
-        for (const card of data.candidates) {
-
-            const imageUrl =
-                card.image
-                    ? `${card.image}/high.webp`
-                    : "";
-
-
-            html += `
-            <div class="candidate">
-
-                ${imageUrl
-                    ? `
-                            <img
-                                src="${imageUrl}"
-                                alt="${card.name}"
-                            >
-                        `
-                    : ""
-                }
-
-                <h3>
-                    ${card.name}
-                </h3>
-
-                <p>
-                    #${card.local_id}
-                </p>
-
-                <button
-                    type="button"
-                    class="confirm-card"
-                    data-card-id="${card.id}"
-                >
-                    É esta
-                </button>
-
-            </div>
-        `;
+    for (const card of data.candidates) {
+        const candidate = element("div", undefined, "candidate");
+        if (card.image) {
+            const image = document.createElement("img");
+            image.src = `${card.image}/high.webp`;
+            image.alt = card.name;
+            candidate.append(image);
         }
-
-
-        html += `
-        </div>
-
-        <button
-            type="button"
-            onclick="location.reload()"
-        >
-            Nenhuma dessas
-        </button>
-    `;
-
-
-        result.innerHTML = html;
+        candidate.append(element("h3", card.name), element("p", `#${card.local_id}`));
+        candidate.append(element("p", `Idioma da carta: ${data.detected.language} · Catálogo: ${card.language}`));
+        const confirm = element("button", "É esta", "confirm-card");
+        confirm.type = "button";
+        confirm.addEventListener("click", () => confirmCard(card, data.detected, confirm, feedback));
+        candidate.append(confirm);
+        candidates.append(candidate);
     }
 
-    if (data.candidates.length > 0) {
+    const retry = element("button", "Nenhuma dessas", "secondary-button");
+    retry.type = "button";
+    retry.addEventListener("click", () => {
+        result.replaceChildren();
+        cameraInput.value = "";
+        if (previewUrl) URL.revokeObjectURL(previewUrl);
+        preview.removeAttribute("src");
+        previewContainer.classList.remove("visible");
+        scanButton.disabled = true;
+        cameraInput.click();
+    });
+    result.append(candidates, feedback, retry);
+}
 
-        html += `
-            <h2>
-                Possíveis cartas
-            </h2>
-        `;
+async function confirmCard(card, detected, button, feedback) {
+    if (busy) return;
+    setBusy(true);
+    button.textContent = "Salvando...";
+    feedback.textContent = "Adicionando carta ao inventário...";
+    feedback.classList.remove("error-message");
 
-        for (const card of data.candidates) {
-
-            const imageUrl =
-                card.image
-                    ? `${card.image}/low.webp`
-                    : "";
-
-            html += `
-                <div class="candidate">
-
-                    ${imageUrl
-                    ?
-                    `
-                        <img
-                            src="${imageUrl}"
-                            alt="${card.name}"
-                        >
-                        `
-                    :
-                    ""
-                }
-
-                    <h3>
-                        ${card.name}
-                    </h3>
-
-                    <p>
-                        #${card.local_id}
-                    </p>
-
-                    <p>
-                        Match:
-                        ${card.score}%
-                    </p>
-
-                </div>
-            `;
-        }
-
-    } else {
-
-        html += `
-            <p>
-                Nenhuma carta correspondente
-                encontrada na base.
-            </p>
-        `;
-
+    try {
+        const response = await fetch("/api/portfolio/cards", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                game: detected.game,
+                provider: "tcgdex",
+                external_id: card.id,
+                language: detected.language,
+                catalog_language: card.language,
+                collector_number: detected.collector_number
+            })
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || "Não foi possível salvar a carta.");
+        feedback.textContent = "Carta salva! Abrindo seu inventário...";
+        window.location.assign(data.redirect_url);
+    } catch (error) {
+        feedback.textContent = `Erro: ${error.message}`;
+        feedback.classList.add("error-message");
+        button.textContent = "É esta";
+        setBusy(false);
     }
-
-    result.innerHTML = html;
 }

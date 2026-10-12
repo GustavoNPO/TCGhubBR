@@ -1,14 +1,140 @@
-from flask import Flask, jsonify, render_template, request
+import os
+import re
+
+import requests
+from flask import Flask, jsonify, render_template, request, url_for
 
 from services.vision import extract_card_info
 
 from services.tcgdex import (
     find_card_candidates,
-    select_best_candidates
+    select_best_candidates,
+    get_card_details
 )
+from services.portfolio import add_portfolio_card, list_portfolio_cards
+from services.firebase import FirebaseUnavailable
 
 
 app = Flask(__name__)
+app.config["DEV_USER_ID"] = os.getenv("DEV_USER_ID", "demo-user")
+
+CARD_LANGUAGES = {
+    "en", "pt-br", "es", "fr", "de", "it", "ja", "ko",
+    "zh-tw", "zh-cn", "unknown"
+}
+LANGUAGE_LABELS = {
+    "en": "Inglês", "pt-br": "Português (Brasil)", "es": "Espanhol",
+    "fr": "Francês", "de": "Alemão", "it": "Italiano", "ja": "Japonês",
+    "ko": "Coreano", "zh-tw": "Chinês tradicional",
+    "zh-cn": "Chinês simplificado", "unknown": "Não identificado"
+}
+
+
+def get_current_user_id():
+    # Futuramente: UID do token Firebase Authentication validado no servidor.
+    # O navegador nunca escolhe o dono do inventário.
+    user_id = app.config["DEV_USER_ID"]
+    if not isinstance(user_id, str) or not user_id.strip() or "/" in user_id:
+        raise FirebaseUnavailable("Configure um DEV_USER_ID válido no servidor.")
+    return user_id
+
+
+@app.get("/portfolio")
+def portfolio():
+    try:
+        cards = list_portfolio_cards(get_current_user_id())
+    except FirebaseUnavailable as error:
+        return render_template(
+            "portfolio.html", cards=[], error=str(error),
+            language_labels=LANGUAGE_LABELS
+        ), 503
+    except Exception:
+        app.logger.exception("Erro ao carregar portfolio")
+        return render_template(
+            "portfolio.html", cards=[],
+            error="Não foi possível carregar seu inventário. Tente novamente.",
+            language_labels=LANGUAGE_LABELS
+        ), 503
+
+    return render_template(
+        "portfolio.html", cards=cards, error=None,
+        language_labels=LANGUAGE_LABELS
+    )
+
+
+@app.post("/api/portfolio/cards")
+def create_portfolio_card():
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify(status="error", error="Envie um objeto JSON válido."), 400
+
+    if data.get("game") != "pokemon" or data.get("provider") != "tcgdex":
+        return jsonify(
+            status="error", error="Somente Pokémon via TCGdex está disponível."
+        ), 400
+
+    external_id = data.get("external_id")
+    language = data.get("language", "unknown")
+    catalog_language = data.get("catalog_language")
+    collector_number = data.get("collector_number")
+
+    if (
+        not isinstance(external_id, str)
+        or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,119}", external_id)
+        or not isinstance(language, str) or language not in CARD_LANGUAGES
+        or not isinstance(catalog_language, str)
+        or catalog_language not in CARD_LANGUAGES - {"unknown"}
+        or (
+            collector_number is not None and (
+                not isinstance(collector_number, str) or len(collector_number) > 50
+            )
+        )
+    ):
+        return jsonify(status="error", error="Dados da carta inválidos."), 400
+
+    try:
+        user_id = get_current_user_id()
+        # Nome, coleção e imagem vêm do catálogo, não do navegador.
+        card = get_card_details(external_id, catalog_language)
+        if card is None:
+            return jsonify(
+                status="error", error="Carta não encontrada no catálogo. Faça outro scan."
+            ), 404
+
+        image = card.get("image")
+        item = {
+            "game": "pokemon",
+            "provider": "tcgdex",
+            "external_id": card["id"],
+            "name": card["name"],
+            "collector_number": (collector_number or "").strip() or card.get("localId"),
+            "set_name": card.get("set", {}).get("name"),
+            "image_url": f"{image}/high.webp" if image else None,
+            "language": language,
+            "catalog_language": catalog_language,
+            "condition": None,
+            "variant": None,
+            "favorite": False,
+            "for_trade": False,
+            "for_sale": False
+        }
+        card_id = add_portfolio_card(user_id, item)
+    except FirebaseUnavailable as error:
+        return jsonify(status="error", error=str(error)), 503
+    except (requests.RequestException, ValueError):
+        app.logger.exception("Erro ao consultar detalhes no TCGdex")
+        return jsonify(
+            status="error", error="Catálogo indisponível. Tente confirmar novamente."
+        ), 502
+    except Exception:
+        app.logger.exception("Erro ao salvar carta no portfolio")
+        return jsonify(
+            status="error", error="Não foi possível salvar a carta. Tente novamente."
+        ), 503
+
+    return jsonify(
+        status="ok", card_id=card_id, redirect_url=url_for("portfolio")
+    ), 201
 
 
 # Limite máximo de upload: 10 MB

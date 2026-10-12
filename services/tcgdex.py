@@ -3,6 +3,19 @@ import requests
 
 TCGDEX_BASE_URL = "https://api.tcgdex.net/v2"
 
+def get_card_details(card_id, language):
+    # Apenas a carta confirmada precisa de uma consulta de detalhes.
+    response = requests.get(
+        f"{TCGDEX_BASE_URL}/{language}/cards/{card_id}",
+        timeout=8
+    )
+    if response.status_code == 404:
+        return None
+    response.raise_for_status()
+    card = response.json()
+    if not isinstance(card, dict) or card.get("id") != card_id or not card.get("name"):
+        raise ValueError("Resposta inválida do TCGdex.")
+    return card
 
 def normalize_number(value):
 

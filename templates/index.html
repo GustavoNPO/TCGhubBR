@@ -16,6 +16,11 @@
 
     <main class="container">
 
+        <nav class="main-nav" aria-label="Navegação principal">
+            <a href="{{ url_for('home') }}" aria-current="page">Scanner</a>
+            <a href="{{ url_for('portfolio') }}">Meu portfolio</a>
+        </nav>
+
         <h1>TCG Hub</h1>
 
         <p>
@@ -45,7 +50,7 @@
         </form>
 
 
-        <div id="result"></div>
+        <div id="result" aria-live="polite"></div>
 
 
 
