@@ -13,7 +13,7 @@ from services.tcgdex import (
 )
 from services.portfolio import add_portfolio_card, list_portfolio_cards
 from services.firebase import FirebaseUnavailable
-
+from services.ligapokemon import CARD_CONDITIONS, search_liga_card
 
 app = Flask(__name__)
 app.config["DEV_USER_ID"] = os.getenv("DEV_USER_ID", "demo-user")
@@ -37,6 +37,19 @@ def get_current_user_id():
     if not isinstance(user_id, str) or not user_id.strip() or "/" in user_id:
         raise FirebaseUnavailable("Configure um DEV_USER_ID válido no servidor.")
     return user_id
+
+@app.get("/api/ligapokemon/search")
+def liga_search():
+    try:
+        result = search_liga_card(
+            request.args.get("name", ""),
+            request.args.get("collector_number", ""),
+            request.args.get("condition", "")
+        )
+    except ValueError as error:
+        return jsonify(status="error", error=str(error)), 400
+    print(f"Liga Pokémon -> {result['query']} | condição={result['condition']} | status={result['status']} | HTTP={result.get('upstream_status', '-')} | preço={result['price']}")
+    return jsonify(result)
 
 
 @app.get("/portfolio")

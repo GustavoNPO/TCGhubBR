@@ -94,9 +94,22 @@ a:focus-visible, button:focus-visible, .camera-button:focus-within { outline: 3p
 .candidate h3 { overflow-wrap: anywhere; }
 .candidate p { margin-bottom: 16px; font-size: .875rem; }
 .candidate button { width: 100%; }
+.candidate .secondary-button { margin-top: 10px; }
 .secondary-button { background: #334155; }
 .error-message { color: #fca5a5; }
 .save-feedback:empty { display: none; }
+
+.liga-search { margin-top: 40px; padding-top: 20px; border-top: 1px solid #334155; }
+#liga-search-form { display: grid; gap: 12px; text-align: left; }
+#liga-search-form input { width: 100%; padding: 14px; border: 1px solid #475569; border-radius: 8px; background: #1e293b; color: white; font: inherit; }
+.candidate label { display: block; text-align: left; margin: 16px 0; }
+.candidate select, #liga-search-form select { width: 100%; padding: 12px; border: 1px solid #475569; border-radius: 8px; background: #1e293b; color: white; font: inherit; }
+.candidate select { margin-top: 8px; }
+.price-result { margin: 16px 0; }
+.price-result .button-link { font-size: .8rem; padding: 10px; }
+.price-result .price-value { color: #93c5fd; font-size: 1.2rem; font-weight: bold; }
+#liga-search-form input:focus-visible { outline: 3px solid #93c5fd; outline-offset: 2px; }
+#liga-result { margin-top: 20px; overflow-wrap: anywhere; }
 
 .portfolio-container { width: min(100% - 32px, 1120px); text-align: left; padding-top: 24px; }
 .portfolio-container .main-nav { justify-content: flex-start; }

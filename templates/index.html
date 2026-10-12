@@ -52,6 +52,29 @@
 
         <div id="result" aria-live="polite"></div>
 
+        <section class="liga-search" aria-labelledby="liga-heading">
+            <h2 id="liga-heading">Consultar na Liga Pokémon</h2>
+            <p>Digite os dados ou use um candidato do scanner. Você pode corrigir os campos antes de buscar.</p>
+            <form id="liga-search-form">
+                <label for="liga-name">Nome da carta</label>
+                <input id="liga-name" type="text" maxlength="120" required placeholder="Pikachu">
+                <label for="liga-number">Número da carta (opcional)</label>
+                <input id="liga-number" type="text" maxlength="30" placeholder="025/165">
+                <label for="liga-condition">Condição da carta</label>
+                <select id="liga-condition" required>
+                    <option value="">Selecione a condição</option>
+                    <option value="NM">NM</option>
+                    <option value="SP">SP</option>
+                    <option value="MP">MP</option>
+                    <option value="HP">HP</option>
+                    <option value="DM">DM</option>
+                </select>
+                <button type="submit">Consultar preço na Liga</button>                
+            </form>
+            <div id="liga-result" aria-live="polite"></div>
+        </section>
+
+
 
 
     </main>

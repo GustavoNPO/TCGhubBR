@@ -84,7 +84,7 @@ function showResult(data) {
     }
 
     result.append(element("h2", "Encontramos sua carta"));
-    result.append(element("p", "Confirme a carta para adicioná-la ao inventário."));
+    result.append(element("p", "Selecione a condição da carta escolhida para consultar o preço. Depois, confirme para adicionar ao inventário."));
     const candidates = element("div", undefined, "candidates");
     const feedback = element("p", "", "save-feedback");
     feedback.setAttribute("role", "status");
@@ -99,9 +99,41 @@ function showResult(data) {
         }
         candidate.append(element("h3", card.name), element("p", `#${card.local_id}`));
         candidate.append(element("p", `Idioma da carta: ${data.detected.language} · Catálogo: ${card.language}`));
+        const conditionLabel = element("label", "Condição da carta");
+        const condition = document.createElement("select");
+        condition.required = true;
+        for (const value of ["", "NM", "SP", "MP", "HP", "DM"]) {
+            const option = element("option", value || "Selecione a condição");
+            option.value = value;
+            condition.append(option);
+        }
+        conditionLabel.append(condition);
+        const priceResult = element("div", undefined, "price-result");
+        priceResult.setAttribute("aria-live", "polite");
+        condition.addEventListener("change", async () => {
+            if (!condition.value) {
+                priceResult.replaceChildren();
+                return;
+            }
+            condition.disabled = true;
+            try {
+                await consultLigaPrice(
+                    data.detected.printed_name || card.name,
+                    data.detected.collector_number || card.local_id || "",
+                    condition.value, priceResult
+                );
+            } finally {
+                condition.disabled = false;
+            }
+        });
+        candidate.append(conditionLabel, priceResult);
         const confirm = element("button", "É esta", "confirm-card");
         confirm.type = "button";
-        confirm.addEventListener("click", () => confirmCard(card, data.detected, confirm, feedback));
+        confirm.addEventListener("click", () => {
+            if (!condition.disabled && condition.reportValidity()) {
+                confirmCard(card, data.detected, confirm, feedback, condition.value);
+            }
+        });
         candidate.append(confirm);
         candidates.append(candidate);
     }
@@ -120,7 +152,7 @@ function showResult(data) {
     result.append(candidates, feedback, retry);
 }
 
-async function confirmCard(card, detected, button, feedback) {
+async function confirmCard(card, detected, button, feedback, condition) {
     if (busy) return;
     setBusy(true);
     button.textContent = "Salvando...";
@@ -137,7 +169,8 @@ async function confirmCard(card, detected, button, feedback) {
                 external_id: card.id,
                 language: detected.language,
                 catalog_language: card.language,
-                collector_number: detected.collector_number
+                collector_number: detected.collector_number,
+                condition: condition
             })
         });
         const data = await response.json();
@@ -149,5 +182,49 @@ async function confirmCard(card, detected, button, feedback) {
         feedback.classList.add("error-message");
         button.textContent = "É esta";
         setBusy(false);
+    }
+}
+
+// Os dois fluxos chegam aqui: campos digitados ou preenchidos pelo scanner.
+const ligaForm = document.querySelector("#liga-search-form");
+ligaForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const button = ligaForm.querySelector("button");
+    button.disabled = true;
+    try {
+        await consultLigaPrice(
+            document.querySelector("#liga-name").value,
+            document.querySelector("#liga-number").value,
+            document.querySelector("#liga-condition").value,
+            document.querySelector("#liga-result")
+        );
+    } finally {
+        button.disabled = false;
+    }
+});
+
+async function consultLigaPrice(name, number, condition, target) {
+    const params = new URLSearchParams({
+        name: name,
+        collector_number: number,
+        condition: condition
+    });
+    target.replaceChildren(element("p", "Consultando preço na Liga..."));
+
+    try {
+        const response = await fetch(`/api/ligapokemon/search?${params}`);
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || "Não foi possível consultar a Liga.");
+        const link = element("a", "Conferir na Liga", "button-link");
+        link.href = data.search_url;
+        link.target = "_blank";
+        link.rel = "noopener noreferrer";
+        const price = data.status === "ok" && typeof data.price === "number"
+            ? new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(data.price)
+            : "Preço indisponível";
+        target.replaceChildren(element("p", `Condição selecionada: ${condition}`),
+            element("p", price, "price-value"), element("p", data.message), link);
+    } catch (error) {
+        target.replaceChildren(element("p", error.message, "error-message"));
     }
 }
