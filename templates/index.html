@@ -17,14 +17,26 @@
     <main class="container">
 
         <nav class="main-nav" aria-label="Navegação principal">
-            <a href="{{ url_for('home') }}" aria-current="page">Scanner</a>
+            <a href="{{ url_for('home') }}" aria-current="page">Adicionar carta</a>
             <a href="{{ url_for('portfolio') }}">Meu portfolio</a>
         </nav>
 
-        <h1>TCG Hub</h1>
+        <header class="brand-header">
+            <div class="brand-title">
+                <span class="brand-mark" aria-hidden="true"><span></span><span></span></span>
+                <h1>TCG <span>Hub</span></h1>
+            </div>
+            <!-- <p class="brand-tagline">Suas cartas. Sua coleção.</p> -->
+        </header>
+
+        <ol id="entry-progress" class="flow-steps" role="list" aria-label="Etapas para adicionar uma carta">
+            <li data-step="1" aria-current="step"><span class="step-number" aria-hidden="true">1</span>Encontrar</li>
+            <li data-step="2"><span class="step-number" aria-hidden="true">2</span>Conferir</li>
+            <li data-step="3"><span class="step-number" aria-hidden="true">3</span>Adicionar</li>
+        </ol>
 
         <p>
-            Tire uma foto da sua carta.
+            Fotografe ou busque pelo nome. Os dois caminhos usam a mesma confirmação.
         </p>
 
         <form id="scan-form" enctype="multipart/form-data">
@@ -50,18 +62,32 @@
         </form>
 
 
-        <div id="result" aria-live="polite"></div>
+        <p id="scan-feedback" role="status"></p>
 
-        <section class="liga-search" aria-labelledby="liga-heading">
-            <h2 id="liga-heading">Consultar na Liga Pokémon</h2>
-            <p>Digite os dados ou use um candidato do scanner. Você pode corrigir os campos antes de buscar.</p>
-            <form id="liga-search-form">
-                <label for="liga-name">Nome da carta</label>
-                <input id="liga-name" type="text" maxlength="120" required placeholder="Pikachu">
-                <label for="liga-number">Número da carta (opcional)</label>
-                <input id="liga-number" type="text" maxlength="30" placeholder="025/165">
-                <label for="liga-condition">Condição da carta</label>
-                <select id="liga-condition" required>
+        <section class="card-entry" aria-labelledby="entry-heading">
+            <h2 id="entry-heading">Dados da carta</h2>
+            <p>Você pode preencher os campos enquanto a foto é analisada.</p>
+            <form id="card-entry-form">
+                <label for="card-name">Nome para buscar no catálogo</label>
+                <input id="card-name" type="text" minlength="2" maxlength="120" required placeholder="Mew ex">
+                <label for="card-number">Número da carta (opcional)</label>
+                <input id="card-number" type="text" maxlength="50" placeholder="232/091">
+                <label for="catalog-language">Idioma do catálogo</label>
+                <select id="catalog-language">
+                    {% for code, label in catalog_language_labels.items() %}
+                        <option value="{{ code }}" {{ 'selected' if code == 'en' else '' }}>{{ label }}</option>
+                    {% endfor %}
+                </select>
+                <button id="catalog-search-button" type="button" class="secondary-button">Buscar no catálogo</button>
+                <label for="card-language">Idioma da carta física</label>
+                <select id="card-language">
+                    <option value="unknown">Não identificado</option>
+                    {% for code, label in language_labels.items() if code != 'unknown' %}
+                        <option value="{{ code }}">{{ label }}</option>
+                    {% endfor %}
+                </select>
+                <label for="card-condition">Condição da carta</label>
+                <select id="card-condition" required>
                     <option value="">Selecione a condição</option>
                     <option value="NM">NM</option>
                     <option value="SP">SP</option>
@@ -69,9 +95,25 @@
                     <option value="HP">HP</option>
                     <option value="DM">DM</option>
                 </select>
-                <button type="submit">Consultar preço na Liga</button>                
+                <label for="card-variant">Variante</label>
+                <select id="card-variant">
+                    <option value="">Não informada</option>
+                    <option value="normal">Normal</option>
+                    <option value="holo">Holo</option>
+                    <option value="reverse">Reverse holo</option>
+                </select>
+                <button id="add-card-button" type="submit" disabled>Adicionar ao portfolio</button>
             </form>
-            <div id="liga-result" aria-live="polite"></div>
+            <p id="entry-feedback" role="status">Busque ou fotografe uma carta para escolher um candidato.</p>
+            <div id="result" aria-live="polite"></div>
+            <div id="chosen-card" class="chosen-card" hidden></div>
+            <section id="price-panels" hidden aria-label="Referências de preço">
+                <p>Você pode adicionar a carta enquanto os preços carregam.</p>
+                <div class="price-panels">
+                    <section><h3>Liga Pokémon</h3><div id="liga-result" aria-live="polite"></div></section>
+                    <section><h3>Referência internacional</h3><div id="catalog-price-result" aria-live="polite"></div></section>
+                </div>
+            </section>
         </section>
 
 
@@ -79,7 +121,22 @@
 
     </main>
 
+    <dialog id="entry-dialog" class="continuity-dialog"
+        aria-labelledby="entry-dialog-title" aria-describedby="entry-dialog-card entry-dialog-message">
+        <div class="dialog-content">
+            <button id="entry-dialog-close" class="dialog-close" type="button" aria-label="Fechar orientação">×</button>
+            <span class="dialog-check" aria-hidden="true">✓</span>
+            <p class="dialog-kicker">Próximo passo</p>
+            <h2 id="entry-dialog-title">Carta selecionada!</h2>
+            <p id="entry-dialog-card" class="dialog-card-name"></p>
+            <p id="entry-dialog-message"></p>
+            <button id="entry-dialog-continue" class="dialog-continue" type="button" autofocus>Continuar cadastro</button>
+            <p class="dialog-note">Os preços podem continuar carregando enquanto você confere os dados.</p>
+        </div>
+    </dialog>
+
     <script src="{{ url_for('static', filename='js/camera.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/card-form.js') }}"></script>
 
 </body>
 

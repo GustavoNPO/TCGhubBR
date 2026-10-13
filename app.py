@@ -4,16 +4,17 @@ import re
 import requests
 from flask import Flask, jsonify, render_template, request, url_for
 
-from services.vision import extract_card_info
-
 from services.tcgdex import (
     find_card_candidates,
     select_best_candidates,
-    get_card_details
+    get_card_details,
+    search_catalog_cards,
+    normalize_number
 )
 from services.portfolio import add_portfolio_card, list_portfolio_cards
 from services.firebase import FirebaseUnavailable
 from services.ligapokemon import CARD_CONDITIONS, search_liga_card
+from services.pricing import get_catalog_prices
 
 app = Flask(__name__)
 app.config["DEV_USER_ID"] = os.getenv("DEV_USER_ID", "demo-user")
@@ -28,6 +29,50 @@ LANGUAGE_LABELS = {
     "ko": "Coreano", "zh-tw": "Chinês tradicional",
     "zh-cn": "Chinês simplificado", "unknown": "Não identificado"
 }
+CATALOG_LANGUAGES = (CARD_LANGUAGES - {"unknown"}) | {"pt"}
+CATALOG_LANGUAGE_LABELS = {
+    **{code: label for code, label in LANGUAGE_LABELS.items() if code != "unknown"},
+    "pt": "Português (catálogo pt)"
+}
+CARD_VARIANTS = {"normal", "holo", "reverse"}
+
+
+@app.get("/api/cards/search")
+def catalog_search():
+    name = request.args.get("name", "").strip()
+    number = request.args.get("collector_number", "").strip()
+    language = request.args.get("catalog_language", "en")
+    if not 2 <= len(name) <= 120 or len(number) > 50 or language not in CATALOG_LANGUAGES:
+        return jsonify(status="error", error="Confira o nome, número e idioma do catálogo."), 400
+    try:
+        cards = search_catalog_cards(name, number, language)
+    except (requests.RequestException, ValueError):
+        return jsonify(status="error", error="Catálogo indisponível. Tente buscar novamente."), 502
+    return jsonify(status="ok", candidates=cards)
+
+
+@app.get("/api/cards/<card_id>/prices")
+def catalog_prices(card_id):
+    language = request.args.get("catalog_language", "en")
+    variant = request.args.get("variant", "")
+    if (
+        not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,119}", card_id)
+        or language not in CATALOG_LANGUAGES
+        or variant not in CARD_VARIANTS | {""}
+    ):
+        return jsonify(status="error", error="Dados da carta inválidos."), 400
+    try:
+        card = get_card_details(card_id, language)
+        if card is None:
+            return jsonify(status="error", error="Carta não encontrada."), 404
+        quotes = get_catalog_prices(card, variant)
+    except (requests.RequestException, ValueError):
+        return jsonify(status="unavailable", quotes=[], message="Referência internacional indisponível."), 502
+    return jsonify(
+        status="ok" if quotes else "unavailable", quotes=quotes,
+        catalog_language=language,
+        message="Estimativa internacional; sem ajuste por idioma da carta ou conservação."
+    )
 
 
 def get_current_user_id():
@@ -41,13 +86,36 @@ def get_current_user_id():
 @app.get("/api/ligapokemon/search")
 def liga_search():
     try:
+        name = request.args.get("name", "")
+        number = request.args.get("collector_number", "")
+        language = request.args.get("language", "unknown")
+        catalog_language = request.args.get("catalog_language", "en")
+        card_id = request.args.get("external_id")
+        if language not in CARD_LANGUAGES or catalog_language not in CATALOG_LANGUAGES:
+            raise ValueError("Idioma inválido.")
+        if card_id:
+            if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,119}", card_id):
+                raise ValueError("Carta inválida.")
+            # Confirma a relação com o catálogo; o preço continua geral.
+            card = get_card_details(card_id, catalog_language)
+            if card is None:
+                return jsonify(status="error", error="Carta não encontrada no catálogo."), 404
+            name = card["name"]
+            if normalize_number(number) != normalize_number(card.get("localId")):
+                number = str(card.get("localId") or "")
+            if "/" not in number:
+                total = (card.get("set") or {}).get("cardCount", {}).get("official")
+                if total:
+                    number = f"{number}/{total}"
         result = search_liga_card(
-            request.args.get("name", ""),
-            request.args.get("collector_number", ""),
+            name, number,
             request.args.get("condition", "")
         )
+        result.update(language=language, catalog_language=catalog_language, language_matched=False)
     except ValueError as error:
         return jsonify(status="error", error=str(error)), 400
+    except requests.RequestException:
+        return jsonify(status="unavailable", price=None, message="Não foi possível confirmar os dados no catálogo."), 502
     print(f"Liga Pokémon -> {result['query']} | condição={result['condition']} | status={result['status']} | HTTP={result.get('upstream_status', '-')} | preço={result['price']}")
     return jsonify(result)
 
@@ -59,19 +127,19 @@ def portfolio():
     except FirebaseUnavailable as error:
         return render_template(
             "portfolio.html", cards=[], error=str(error),
-            language_labels=LANGUAGE_LABELS
+            language_labels={**LANGUAGE_LABELS, "pt": "Português (catálogo pt)"}
         ), 503
     except Exception:
         app.logger.exception("Erro ao carregar portfolio")
         return render_template(
             "portfolio.html", cards=[],
             error="Não foi possível carregar seu inventário. Tente novamente.",
-            language_labels=LANGUAGE_LABELS
+            language_labels={**LANGUAGE_LABELS, "pt": "Português (catálogo pt)"}
         ), 503
 
     return render_template(
         "portfolio.html", cards=cards, error=None,
-        language_labels=LANGUAGE_LABELS
+        language_labels={**LANGUAGE_LABELS, "pt": "Português (catálogo pt)"}
     )
 
 
@@ -90,13 +158,21 @@ def create_portfolio_card():
     language = data.get("language", "unknown")
     catalog_language = data.get("catalog_language")
     collector_number = data.get("collector_number")
+    condition = data.get("condition")
+    variant = data.get("variant") or None
 
     if (
         not isinstance(external_id, str)
         or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,119}", external_id)
         or not isinstance(language, str) or language not in CARD_LANGUAGES
         or not isinstance(catalog_language, str)
-        or catalog_language not in CARD_LANGUAGES - {"unknown"}
+        or catalog_language not in CATALOG_LANGUAGES
+        or (condition is not None and (
+            not isinstance(condition, str) or condition not in CARD_CONDITIONS
+        ))
+        or (variant is not None and (
+            not isinstance(variant, str) or variant not in CARD_VARIANTS
+        ))
         or (
             collector_number is not None and (
                 not isinstance(collector_number, str) or len(collector_number) > 50
@@ -125,8 +201,8 @@ def create_portfolio_card():
             "image_url": f"{image}/high.webp" if image else None,
             "language": language,
             "catalog_language": catalog_language,
-            "condition": None,
-            "variant": None,
+            "condition": condition,
+            "variant": variant,
             "favorite": False,
             "for_trade": False,
             "for_sale": False
@@ -164,7 +240,10 @@ ALLOWED_IMAGE_TYPES = {
 @app.route("/")
 def home():
 
-    return render_template("index.html")
+    return render_template(
+        "index.html", language_labels=LANGUAGE_LABELS,
+        catalog_language_labels=CATALOG_LANGUAGE_LABELS
+    )
 
 
 @app.route("/scan", methods=["POST"])
@@ -219,6 +298,9 @@ def scan():
         # =========================
         # 3. GEMINI ANALISA A CARTA
         # =========================
+
+        # Cadastro manual funciona mesmo sem configurar o cliente Gemini.
+        from services.vision import extract_card_info
 
         print("Enviando imagem para o Gemini...")
 

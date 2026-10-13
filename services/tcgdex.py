@@ -17,6 +17,27 @@ def get_card_details(card_id, language):
         raise ValueError("Resposta inválida do TCGdex.")
     return card
 
+def search_catalog_cards(name, collector_number, language):
+    """Busca manual no catálogo, sem chamar o Gemini."""
+    params = {"name": name}
+    if not collector_number:
+        params.update({"pagination:page": 1, "pagination:itemsPerPage": 12})
+    response = requests.get(
+        f"{TCGDEX_BASE_URL}/{language}/cards", params=params, timeout=8
+    )
+    response.raise_for_status()
+    cards = response.json()
+    if not isinstance(cards, list):
+        raise ValueError("Resposta inválida do catálogo.")
+    if collector_number:
+        cards = [card for card in cards if
+                 normalize_number(card.get("localId")) == normalize_number(collector_number)]
+    return [{
+        "id": card["id"], "name": card["name"],
+        "local_id": card.get("localId"), "image": card.get("image"),
+        "language": language
+    } for card in cards[:12]]
+
 def normalize_number(value):
 
     if not value:
