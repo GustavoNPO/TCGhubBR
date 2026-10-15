@@ -1,5 +1,6 @@
 import os
 import re
+from functools import wraps
 
 import requests
 from flask import Flask, jsonify, render_template, request, url_for
@@ -9,12 +10,20 @@ from services.tcgdex import (
     select_best_candidates,
     get_card_details,
     search_catalog_cards,
+    get_catalog_sets,
+    is_physical_card,
     normalize_number
 )
-from services.portfolio import add_portfolio_card, list_portfolio_cards
+from services.portfolio import (
+    add_portfolio_card, list_portfolio_cards, get_portfolio_card,
+    list_portfolio_folders, create_portfolio_folder, rename_portfolio_folder,
+    delete_portfolio_folder, mutate_portfolio_cards, save_portfolio_prices,
+    PortfolioNotFound
+)
+from services.market import get_market_prices, prices_are_fresh
 from services.firebase import FirebaseUnavailable
-from services.ligapokemon import CARD_CONDITIONS, search_liga_card
-from services.pricing import get_catalog_prices
+from services.ligapokemon import CARD_CONDITIONS, liga_link_for_card
+from services.pricing import get_international_prices, PRICING_VERSION
 
 app = Flask(__name__)
 app.config["DEV_USER_ID"] = os.getenv("DEV_USER_ID", "demo-user")
@@ -41,14 +50,33 @@ CARD_VARIANTS = {"normal", "holo", "reverse"}
 def catalog_search():
     name = request.args.get("name", "").strip()
     number = request.args.get("collector_number", "").strip()
-    language = request.args.get("catalog_language", "en")
-    if not 2 <= len(name) <= 120 or len(number) > 50 or language not in CATALOG_LANGUAGES:
-        return jsonify(status="error", error="Confira o nome, número e idioma do catálogo."), 400
+    language = request.args.get("catalog_language", "auto")
+    set_id = request.args.get("set_id", "").strip()
+    page_value = request.args.get("page", "1")
+    page = int(page_value) if re.fullmatch(r"[0-9]{1,3}", page_value) else None
+    if (
+        (name and not 2 <= len(name) <= 120) or len(number) > 50
+        or not (name or number or set_id) or language not in CATALOG_LANGUAGES | {"auto"}
+        or (set_id and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,79}", set_id))
+        or page is None or not 1 <= page <= 100
+        or (number and not re.fullmatch(r"[A-Za-z0-9]+(?:\s*/\s*[A-Za-z0-9]+)?", number))
+    ):
+        return jsonify(status="error", error="Informe o nome ou use coleção e número para encontrar a carta."), 400
     try:
-        cards = search_catalog_cards(name, number, language)
+        cards = search_catalog_cards(name, number, language, set_id)
     except (requests.RequestException, ValueError):
         return jsonify(status="error", error="Catálogo indisponível. Tente buscar novamente."), 502
-    return jsonify(status="ok", candidates=cards)
+    start = (page - 1) * 12
+    return jsonify(status="ok", candidates=cards[start:start + 12], page=page,
+                   has_more=len(cards) > start + 12, total=len(cards))
+
+
+@app.get("/api/sets")
+def catalog_sets():
+    try:
+        return jsonify(status="ok", sets=get_catalog_sets())
+    except (requests.RequestException, ValueError):
+        return jsonify(status="unavailable", sets=[], message="Coleções indisponíveis. Você pode continuar buscando por nome."), 502
 
 
 @app.get("/api/cards/<card_id>/prices")
@@ -65,13 +93,21 @@ def catalog_prices(card_id):
         card = get_card_details(card_id, language)
         if card is None:
             return jsonify(status="error", error="Carta não encontrada."), 404
-        quotes = get_catalog_prices(card, variant)
+        if not is_physical_card(card):
+            return jsonify(status="error", error="Esta carta é do Pokémon Pocket. Busque uma edição física."), 400
+        quotes = get_international_prices(card, variant, language)
     except (requests.RequestException, ValueError):
         return jsonify(status="unavailable", quotes=[], message="Referência internacional indisponível."), 502
     return jsonify(
         status="ok" if quotes else "unavailable", quotes=quotes,
         catalog_language=language,
-        message="Estimativa internacional; sem ajuste por idioma da carta ou conservação."
+        pricing_version=PRICING_VERSION,
+        # A Liga é conferida por link: edição e número levam à carta exata.
+        liga=liga_link_for_card(card),
+        card={"name": card["name"], "image": card.get("image"), "set_name": (card.get("set") or {}).get("name"),
+              "local_id": card.get("localId"), "set_total": (card.get("set") or {}).get("cardCount", {}).get("official"),
+              "variants": card.get("variants") or {}},
+        message="Referência do exterior. A conversão não confirma o valor da carta no Brasil, seu idioma ou conservação."
     )
 
 
@@ -83,64 +119,154 @@ def get_current_user_id():
         raise FirebaseUnavailable("Configure um DEV_USER_ID válido no servidor.")
     return user_id
 
-@app.get("/api/ligapokemon/search")
-def liga_search():
-    try:
-        name = request.args.get("name", "")
-        number = request.args.get("collector_number", "")
-        language = request.args.get("language", "unknown")
-        catalog_language = request.args.get("catalog_language", "en")
-        card_id = request.args.get("external_id")
-        if language not in CARD_LANGUAGES or catalog_language not in CATALOG_LANGUAGES:
-            raise ValueError("Idioma inválido.")
-        if card_id:
-            if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,119}", card_id):
-                raise ValueError("Carta inválida.")
-            # Confirma a relação com o catálogo; o preço continua geral.
-            card = get_card_details(card_id, catalog_language)
-            if card is None:
-                return jsonify(status="error", error="Carta não encontrada no catálogo."), 404
-            name = card["name"]
-            if normalize_number(number) != normalize_number(card.get("localId")):
-                number = str(card.get("localId") or "")
-            if "/" not in number:
-                total = (card.get("set") or {}).get("cardCount", {}).get("official")
-                if total:
-                    number = f"{number}/{total}"
-        result = search_liga_card(
-            name, number,
-            request.args.get("condition", "")
-        )
-        result.update(language=language, catalog_language=catalog_language, language_matched=False)
-    except ValueError as error:
-        return jsonify(status="error", error=str(error)), 400
-    except requests.RequestException:
-        return jsonify(status="unavailable", price=None, message="Não foi possível confirmar os dados no catálogo."), 502
-    print(f"Liga Pokémon -> {result['query']} | condição={result['condition']} | status={result['status']} | HTTP={result.get('upstream_status', '-')} | preço={result['price']}")
-    return jsonify(result)
-
-
 @app.get("/portfolio")
 def portfolio():
     try:
-        cards = list_portfolio_cards(get_current_user_id())
+        user_id = get_current_user_id()
+        cards = list_portfolio_cards(user_id)
+        folders = list_portfolio_folders(user_id)
     except FirebaseUnavailable as error:
         return render_template(
-            "portfolio.html", cards=[], error=str(error),
+            "portfolio.html", cards=[], folders=[], error=str(error),
             language_labels={**LANGUAGE_LABELS, "pt": "Português (catálogo pt)"}
         ), 503
     except Exception:
         app.logger.exception("Erro ao carregar portfolio")
         return render_template(
-            "portfolio.html", cards=[],
+            "portfolio.html", cards=[], folders=[],
             error="Não foi possível carregar seu inventário. Tente novamente.",
             language_labels={**LANGUAGE_LABELS, "pt": "Português (catálogo pt)"}
         ), 503
 
     return render_template(
-        "portfolio.html", cards=cards, error=None,
+        "portfolio.html", cards=cards, folders=folders, error=None,
         language_labels={**LANGUAGE_LABELS, "pt": "Português (catálogo pt)"}
     )
+
+
+def portfolio_api(function):
+    @wraps(function)
+    def handle(*args, **kwargs):
+        try:
+            return function(*args, **kwargs)
+        except PortfolioNotFound as error:
+            return jsonify(status="error", error=str(error)), 404
+        except ValueError as error:
+            return jsonify(status="error", error=str(error)), 400
+        except FirebaseUnavailable as error:
+            return jsonify(status="error", error=str(error)), 503
+        except Exception:
+            app.logger.exception("Erro na manutenção do portfólio")
+            return jsonify(status="error", error="Não foi possível concluir a operação. Tente novamente."), 503
+    return handle
+
+
+def portfolio_json():
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        raise ValueError("Envie um objeto JSON válido.")
+    return data
+
+
+def portfolio_id(value):
+    if not isinstance(value, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,119}", value):
+        raise ValueError("Identificador inválido.")
+    return value
+
+
+def folder_name(data):
+    name = data.get("name")
+    if not isinstance(name, str) or not 1 <= len(name.strip()) <= 80:
+        raise ValueError("Informe um nome de pasta com até 80 caracteres.")
+    return name.strip()
+
+
+@app.post("/api/portfolio/folders")
+@portfolio_api
+def create_folder():
+    name = folder_name(portfolio_json())
+    folder_id = create_portfolio_folder(get_current_user_id(), name)
+    return jsonify(status="ok", folder_id=folder_id), 201
+
+
+@app.patch("/api/portfolio/folders/<folder_id>")
+@portfolio_api
+def rename_folder(folder_id):
+    folder_id = portfolio_id(folder_id)
+    name = folder_name(portfolio_json())
+    rename_portfolio_folder(get_current_user_id(), folder_id, name)
+    return jsonify(status="ok")
+
+
+@app.delete("/api/portfolio/folders/<folder_id>")
+@portfolio_api
+def delete_folder(folder_id):
+    delete_portfolio_folder(get_current_user_id(), portfolio_id(folder_id))
+    return jsonify(status="ok")
+
+
+@app.post("/api/portfolio/cards/bulk")
+@portfolio_api
+def maintain_cards():
+    data = portfolio_json()
+    action = data.get("action")
+    if action not in ("move", "delete", "reorder"):
+        raise ValueError("Operação inválida.")
+    card_ids = data.get("card_ids")
+    if not isinstance(card_ids, list) or not 1 <= len(card_ids) <= 450:
+        raise ValueError("Selecione de 1 a 450 cartas por operação.")
+    card_ids = [portfolio_id(card_id) for card_id in card_ids]
+    if len(set(card_ids)) != len(card_ids):
+        raise ValueError("A seleção contém cartas repetidas.")
+    folder_id = data.get("folder_id")
+    if action == "move" and folder_id is not None:
+        folder_id = portfolio_id(folder_id)
+    mutate_portfolio_cards(get_current_user_id(), card_ids, action, folder_id)
+    return jsonify(status="ok")
+
+
+@app.delete("/api/portfolio/cards/<card_id>")
+@portfolio_api
+def delete_card(card_id):
+    mutate_portfolio_cards(get_current_user_id(), [portfolio_id(card_id)], "delete")
+    return jsonify(status="ok")
+
+
+@app.patch("/api/portfolio/cards/<card_id>")
+@portfolio_api
+def move_card(card_id):
+    data = portfolio_json()
+    if "folder_id" not in data:
+        raise ValueError("Informe a pasta de destino.")
+    folder_id = data["folder_id"]
+    if folder_id is not None:
+        folder_id = portfolio_id(folder_id)
+    mutate_portfolio_cards(get_current_user_id(), [portfolio_id(card_id)], "move", folder_id)
+    return jsonify(status="ok")
+
+
+@app.post("/api/portfolio/cards/<card_id>/prices")
+@portfolio_api
+def portfolio_prices(card_id):
+    data = portfolio_json()
+    force = data.get("force", False)
+    if not isinstance(force, bool):
+        raise ValueError("Atualização inválida.")
+    user_id = get_current_user_id()
+    item = get_portfolio_card(user_id, portfolio_id(card_id))
+    saved = item.get("market_prices")
+    if saved and saved.get("pricing_version") != PRICING_VERSION:
+        # Não reapresenta como fallback uma cotação do mapeamento antigo.
+        saved = None
+    if saved and not force and prices_are_fresh(saved):
+        return jsonify(**saved, cached=True)
+    prices = get_market_prices(item, force=force)
+    if prices["status"] == "ok":
+        save_portfolio_prices(user_id, card_id, prices)
+    elif saved and saved.get("status") == "ok":
+        return jsonify(**saved, cached=True, stale=True,
+                       refresh_message="Não foi possível atualizar. Exibindo a última referência salva.")
+    return jsonify(**prices, cached=False)
 
 
 @app.post("/api/portfolio/cards")
@@ -190,14 +316,29 @@ def create_portfolio_card():
                 status="error", error="Carta não encontrada no catálogo. Faça outro scan."
             ), 404
 
+        if not is_physical_card(card):
+            return jsonify(status="error", error="Pokémon Pocket não pode ser adicionado como carta física."), 400
+
+        if variant and (card.get("variants") or {}).get(variant) is False:
+            return jsonify(status="error", error="Esta variante não está disponível para a edição escolhida."), 400
+
         image = card.get("image")
+        # O número de catálogo confirma a carta; não cotamos outra edição
+        # apenas porque um número diferente foi digitado no navegador.
+        if collector_number and normalize_number(collector_number) != normalize_number(card.get("localId")):
+            return jsonify(status="error", error="O número não corresponde à carta selecionada."), 400
+        local_id = str(card.get("localId") or "")
+        total = (card.get("set") or {}).get("cardCount", {}).get("official")
         item = {
             "game": "pokemon",
             "provider": "tcgdex",
             "external_id": card["id"],
             "name": card["name"],
-            "collector_number": (collector_number or "").strip() or card.get("localId"),
+            "collector_number": f"{local_id}/{total}" if local_id and total else local_id,
             "set_name": card.get("set", {}).get("name"),
+            "set_id": card.get("set", {}).get("id"),
+            "set_total": total,
+            "folder_id": None,
             "image_url": f"{image}/high.webp" if image else None,
             "language": language,
             "catalog_language": catalog_language,

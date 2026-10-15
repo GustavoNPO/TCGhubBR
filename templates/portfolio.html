@@ -1,85 +1,102 @@
 {% macro card_details(card) %}
+    <div class="detail-identity">
     {% if card.image_url %}
         <img class="detail-image" src="{{ card.image_url }}" alt="{{ card.name }}">
     {% else %}
         <div class="image-placeholder detail-image">Imagem indisponível</div>
     {% endif %}
-    <span class="game-label">Pokémon · TCGdex</span>
-    <h2>{{ card.name }}</h2>
-    <p>{{ card.set_name or 'Coleção não informada' }}</p>
+        <div><span class="game-label">{{ 'Pokémon' if card.game == 'pokemon' else card.game }} · {{ 'TCGdex' if card.provider == 'tcgdex' else card.provider }}</span>
+            <h2>{{ card.name }}</h2><p>{{ card.set_name or 'Coleção não informada' }} · #{{ card.collector_number or '?' }}</p></div>
+    </div>
+    <section class="portfolio-market" aria-label="Referências de preço">
+        <div class="section-heading"><h3>Referências de preço</h3><button type="button" class="secondary-button compact-button" data-action="refresh">Atualizar</button></div>
+        <div class="market-content" aria-live="polite"><p>Consultando referências de preço…</p></div>
+    </section>
     <dl class="card-metadata">
         <dt>Número</dt><dd>{{ card.collector_number or 'Não informado' }}</dd>
         <dt>Idioma da carta</dt><dd>{{ language_labels.get(card.language, card.language) }}</dd>
         <dt>Idioma do catálogo</dt><dd>{{ language_labels.get(card.catalog_language, card.catalog_language) }}</dd>
         <dt>Condição</dt><dd>{{ card.condition or 'Não informada' }}</dd>
-        <dt>Variante</dt><dd>{{ card.variant or 'Não informada' }}</dd>
+        <dt>Variante</dt><dd>{{ {'normal': 'Normal', 'holo': 'Holográfica', 'reverse': 'Holográfica reversa'}.get(card.variant, 'Não informada') }}</dd>
     </dl>
+    <section class="detail-maintenance" aria-label="Organizar carta">
+        <label>Pasta <select data-role="card-folder">
+            <option value="">Sem pasta</option>
+            {% for folder in folders %}<option value="{{ folder.id }}"{{ ' selected' if card.folder_id == folder.id else '' }}>{{ folder.name }}</option>{% endfor %}
+        </select></label>
+        <button type="button" class="secondary-button" data-action="move">Mover carta</button>
+        <div class="order-actions"><button type="button" class="secondary-button compact-button" data-action="earlier">← Mover antes</button><button type="button" class="secondary-button compact-button" data-action="later">Mover depois →</button></div>
+        <button type="button" class="danger-button" data-action="delete">Excluir esta cópia</button>
+    </section>
 {% endmacro %}
 <!DOCTYPE html>
 <html lang="pt-BR">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Meu portfolio · TCG Hub</title>
+    <title>Meu portfólio · TCG Hub</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
 </head>
 <body>
     <main class="container portfolio-container">
-        <nav class="main-nav" aria-label="Navegação principal">
-            <a href="{{ url_for('home') }}">Scanner</a>
-            <a href="{{ url_for('portfolio') }}" aria-current="page">Meu portfolio</a>
-        </nav>
+        <nav class="main-nav" aria-label="Navegação principal"><a href="{{ url_for('home') }}">Scanner</a><a href="{{ url_for('portfolio') }}" aria-current="page">Meu portfólio</a></nav>
         <header class="portfolio-header">
-            <div>
-                <span class="game-label">Sua coleção</span>
-                <h1>Meu portfolio</h1>
-                {% if not error %}
-                    <p>{{ cards|length }} {{ 'carta' if cards|length == 1 else 'cartas' }} no inventário</p>
-                {% endif %}
-            </div>
-            <a class="button-link" href="{{ url_for('home') }}">Escanear carta</a>
+            <div><span class="game-label">Sua coleção</span><h1>Meu portfólio</h1>{% if not error %}<p>{{ cards|length }} {{ 'carta' if cards|length == 1 else 'cartas' }} no inventário</p>{% endif %}</div>
+            <a class="button-link" href="{{ url_for('home') }}">Adicionar carta</a>
         </header>
-
         {% if error %}
-            <section class="empty-state" role="alert">
-                <h2>Inventário indisponível</h2>
-                <p>{{ error }}</p>
-                <a class="button-link" href="{{ url_for('portfolio') }}">Tentar novamente</a>
-            </section>
-        {% elif not cards %}
-            <section class="empty-state">
-                <h2>Sua coleção começa aqui</h2>
-                <p>Fotografe uma carta e confirme o resultado para preencher seu inventário.</p>
-                <a class="button-link" href="{{ url_for('home') }}">Adicionar minha primeira carta</a>
-            </section>
+            <section class="empty-state" role="alert"><h2>Inventário indisponível</h2><p>{{ error }}</p><a class="button-link" href="{{ url_for('portfolio') }}">Tentar novamente</a></section>
         {% else %}
+            <section class="portfolio-toolbar" aria-label="Organização do portfólio">
+                <div class="folder-bar">
+                    <label>Pasta <select id="folder-filter"><option value="all">Todas as cartas</option><option value="none">Sem pasta</option>{% for folder in folders %}<option value="{{ folder.id }}">{{ folder.name }}</option>{% endfor %}</select></label>
+                    <button type="button" id="new-folder" class="secondary-button">Nova pasta</button>
+                    <button type="button" id="rename-folder" class="secondary-button" hidden>Renomear</button>
+                    <button type="button" id="delete-folder" class="danger-button" hidden>Excluir pasta</button>
+                </div>
+                <div class="inventory-filters">
+                    <label>Buscar carta <input id="inventory-search" type="search" placeholder="Nome, coleção ou número"></label>
+                    <label>Ordenar <select id="inventory-sort"><option value="custom">Minha ordem</option><option value="name">Nome (A–Z)</option><option value="set">Coleção (A–Z)</option><option value="recent">Mais recentes</option></select></label>
+                </div>
+                <div class="bulk-bar" id="bulk-bar" hidden>
+                    <span id="selection-count"></span>
+                    <label>Destino <select id="bulk-folder"><option value="">Sem pasta</option>{% for folder in folders %}<option value="{{ folder.id }}">{{ folder.name }}</option>{% endfor %}</select></label>
+                    <button type="button" id="bulk-move" class="secondary-button">Mover selecionadas</button>
+                    <button type="button" id="bulk-delete" class="danger-button">Excluir selecionadas</button>
+                    <button type="button" id="clear-selection" class="secondary-button">Limpar seleção</button>
+                </div>
+            </section>
+            <p id="portfolio-feedback" class="portfolio-feedback" role="status" tabindex="-1"></p>
             <div class="inventory-layout">
                 <section aria-label="Cartas do inventário">
-                    <p class="inventory-hint">Toque em uma carta para ver os detalhes.</p>
-                    <div class="inventory-grid">
+                    <div class="inventory-heading"><p class="inventory-hint" id="inventory-count"></p><label class="select-all"><input type="checkbox" id="select-all"> Selecionar visíveis</label></div>
+                    <p class="inventory-hint" id="order-hint">Arraste as cartas para organizar, ou use as setas nos detalhes.</p>
+                    <div class="inventory-grid" id="inventory-grid">
                         {% for card in cards %}
-                            <button type="button" class="inventory-item{{ ' selected' if loop.first else '' }}"
-                                data-details-id="details-{{ loop.index }}"
-                                aria-pressed="{{ 'true' if loop.first else 'false' }}"
-                                aria-controls="selected-card">
-                                {% if card.image_url %}
-                                    <img src="{{ card.image_url }}" alt="{{ card.name }}" loading="lazy">
-                                {% else %}
-                                    <span class="image-placeholder">Sem imagem</span>
-                                {% endif %}
-                                <span class="item-name">{{ card.name }}</span>
-                                <span class="item-number">#{{ card.collector_number or '?' }}</span>
-                            </button>
+                            <article class="inventory-cell" data-card-id="{{ card.id }}">
+                                <label class="card-check"><input type="checkbox" class="select-card" value="{{ card.id }}" aria-label="Selecionar cópia de {{ card.name }}"> Selecionar</label>
+                                <button type="button" class="inventory-item" data-card-id="{{ card.id }}" data-details-id="details-{{ loop.index }}" aria-pressed="false" aria-controls="selected-card">
+                                    {% if card.image_url %}<img src="{{ card.image_url }}" alt="{{ card.name }}" loading="lazy" draggable="false">{% else %}<span class="image-placeholder">Sem imagem</span>{% endif %}
+                                    <span class="item-name">{{ card.name }}</span><span class="item-number">#{{ card.collector_number or '?' }}</span>
+                                </button>
+                            </article>
                             <template id="details-{{ loop.index }}">{{ card_details(card) }}</template>
                         {% endfor %}
                     </div>
+                    <section class="empty-state" id="inventory-empty" hidden><h2>{{ 'Nenhuma carta nesta seleção' if cards else 'Sua coleção começa aqui' }}</h2><p>{{ 'Escolha outra pasta ou ajuste a busca. Você também pode mover cartas para esta pasta.' if cards else 'Fotografe uma carta ou use a busca manual para preencher seu inventário.' }}</p><a class="button-link" href="{{ url_for('home') }}">Adicionar carta</a></section>
                 </section>
-                <aside id="selected-card" class="card-details" aria-label="Detalhes da carta" aria-live="polite">
-                    {{ card_details(cards[0]) }}
-                </aside>
+                <aside id="selected-card" class="card-details" aria-label="Detalhes da carta" hidden></aside>
             </div>
+            <dialog id="folder-dialog" class="continuity-dialog">
+                <form id="folder-form" class="dialog-content"><h2 id="folder-dialog-title">Nova pasta</h2><label>Nome da pasta <input id="folder-name" maxlength="80" required autocomplete="off" placeholder="Ex.: Pokémon 151"></label><p id="folder-feedback" role="status"></p><div class="dialog-actions"><button type="button" id="folder-cancel" class="secondary-button">Cancelar</button><button type="submit">Salvar pasta</button></div></form>
+            </dialog>
+            <dialog id="confirm-dialog" class="continuity-dialog">
+                <div class="dialog-content"><h2 id="confirm-title">Excluir carta?</h2><p id="confirm-message"></p><p id="confirm-feedback" role="status"></p><div class="dialog-actions"><button type="button" id="confirm-cancel" class="secondary-button">Cancelar</button><button type="button" id="confirm-delete" class="danger-button">Excluir</button></div></div>
+            </dialog>
+            <script id="portfolio-data" type="application/json">{{ {'cards': cards, 'folders': folders}|tojson }}</script>
         {% endif %}
     </main>
-    <script src="{{ url_for('static', filename='js/portfolio.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/price-view.js') }}" defer></script>
+    <script src="{{ url_for('static', filename='js/portfolio.js') }}" defer></script>
 </body>
 </html>

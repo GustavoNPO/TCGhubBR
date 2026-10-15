@@ -7,6 +7,15 @@ import requests
 
 
 _exchange_rates = {}
+PRICING_VERSION = 3
+
+
+def _positive_amount(value):
+    try:
+        amount = float(value)
+        return amount if not isinstance(value, bool) and math.isfinite(amount) and amount > 0 else None
+    except (TypeError, ValueError):
+        return None
 
 
 def get_brl_rate(currency):
@@ -33,27 +42,36 @@ def get_catalog_prices(card, variant=""):
     pricing = card.get("pricing") or {}
     quotes = []
     tcgplayer = pricing.get("tcgplayer") or {}
+    variants = card.get("variants") or {}
+    provider_finishes = {"normal": ("normal",), "holo": ("holofoil", "holo"),
+                         "reverse": ("reverse-holofoil", "reverse")}
     for finish in ("normal", "holo", "reverse"):
-        if variant and variant != finish:
+        if (variant and variant != finish) or variants.get(finish) is False:
             continue
-        amount = (tcgplayer.get(finish) or {}).get("marketPrice")
-        if amount is not None and tcgplayer.get("unit", "USD") == "USD":
+        reference = next((tcgplayer[key] for key in provider_finishes[finish]
+                          if isinstance(tcgplayer.get(key), dict)), {})
+        amount = _positive_amount(reference.get("marketPrice"))
+        if amount and tcgplayer.get("unit", "USD") == "USD":
             quotes.append({
                 "source": "TCGplayer", "variant": finish,
-                "amount": amount, "currency": "USD", "updated_at": tcgplayer.get("updated")
+                "amount": amount, "currency": "USD", "updated_at": tcgplayer.get("updated"),
+                "price_type": "market", "product_id": reference.get("productId"),
+                "price_scope": "international_reference", "physical_language_matched": False,
+                "condition_matched": False
             })
-
-    # Cardmarket não separa reverse de outras variantes nesta referência.
-    if not quotes and variant != "reverse":
-        cardmarket = pricing.get("cardmarket") or {}
-        finishes = [variant] if variant else ["normal", "holo"]
-        for finish in finishes:
+        # O trend geral não identifica uma reverse. Cada variante tem seu
+        # fallback próprio, sem substituir uma holo por preço de carta normal.
+        elif finish != "reverse":
+            cardmarket = pricing.get("cardmarket") or {}
             field = "trend-holo" if finish == "holo" else "trend"
-            amount = cardmarket.get(field)
-            if amount is not None and cardmarket.get("unit", "EUR") == "EUR":
+            amount = _positive_amount(cardmarket.get(field))
+            if amount and cardmarket.get("unit", "EUR") == "EUR":
                 quotes.append({
                     "source": "Cardmarket", "variant": finish,
-                    "amount": amount, "currency": "EUR", "updated_at": cardmarket.get("updated")
+                    "amount": amount, "currency": "EUR", "updated_at": cardmarket.get("updated"),
+                    "price_type": "trend", "product_id": cardmarket.get("idProduct"),
+                    "price_scope": "international_reference", "physical_language_matched": False,
+                    "condition_matched": False
                 })
 
     valid_quotes = []
@@ -81,3 +99,15 @@ def get_catalog_prices(card, variant=""):
         valid_quotes.append(quote)
     return valid_quotes
 
+
+def get_international_prices(card, variant="", catalog_language="en"):
+    quotes = get_catalog_prices(card, variant)
+    if not quotes and catalog_language != "en":
+        from services.tcgdex import get_card_details
+        try:
+            english = get_card_details(card["id"], "en")
+            if english:
+                quotes = get_catalog_prices(english, variant)
+        except (requests.RequestException, ValueError):
+            pass
+    return quotes
