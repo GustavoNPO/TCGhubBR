@@ -42,11 +42,11 @@
     function updateSelection() {
         document.querySelector("#bulk-bar").hidden = selection.size === 0;
         document.querySelector("#selection-count").textContent = `${selection.size} selecionada(s)`;
-        const checked = visibleCards.filter((card) => selection.has(card.id)).length;
-        selectAll.checked = visibleCards.length > 0 && checked === visibleCards.length;
-        selectAll.indeterminate = checked > 0 && checked < visibleCards.length;
-        selectAll.disabled = busy || visibleCards.length === 0;
-    }
+        const checked = pageCards.filter((card) => selection.has(card.id)).length;
+        selectAll.checked = pageCards.length > 0 && checked === pageCards.length;
+        selectAll.indeterminate = checked > 0 && checked < pageCards.length;
+        selectAll.disabled = busy || pageCards.length === 0;
+    }       
 
     function updateOrderControls() {
         const index = visibleCards.findIndex((card) => card.id === selectedId);
@@ -56,7 +56,7 @@
         if (later) later.disabled = busy || sort.value !== "custom" || index < 0 || index === visibleCards.length - 1;
     }
 
-    function renderInventory(preferredId = null) {
+    function renderInventory(focusId = null) {
         const query = normalize(search.value.trim());
         visibleCards = cards.filter((card) => (
             folderFilter.value === "all" || (folderFilter.value === "none" ? !card.folder_id : card.folder_id === folderFilter.value)
@@ -67,14 +67,29 @@
             if (sort.value === "recent") return (Date.parse(b.created_at) || 0) - (Date.parse(a.created_at) || 0) || b.position - a.position;
             return a.position - b.position;
         });
+
+        grid.style.setProperty("--grid-cols", gridSize);
+
+        const pageCount = Math.max(1, Math.ceil(visibleCards.length / pageSize));
+        const focusIndex = visibleCards.findIndex((card) => card.id === focusId);
+        if (focusIndex >= 0) page = Math.floor(focusIndex / pageSize);
+        page = Math.min(Math.max(page, 0), pageCount - 1);
+        pageCards = visibleCards.slice(page * pageSize, (page + 1) * pageSize);
+
         for (const cell of cells.values()) cell.hidden = true;
-        for (const card of visibleCards) {
+        for (const card of pageCards) {
             const cell = cells.get(card.id);
             cell.hidden = false;
             cell.draggable = !busy && sort.value === "custom";
             grid.append(cell);
         }
-        grid.hidden = visibleCards.length === 0;
+        grid.hidden = pageCards.length === 0;
+
+        pager.hidden = pageCount <= 1;
+        pageLabel.textContent = `Página ${page + 1} de ${pageCount}`;
+        prevButton.disabled = busy || page === 0;
+        nextButton.disabled = busy || page >= pageCount - 1;
+
         document.querySelector("#inventory-empty").hidden = visibleCards.length > 0;
         document.querySelector("#inventory-count").textContent = `${visibleCards.length} de ${cards.length} carta(s)`;
         document.querySelector("#order-hint").textContent = sort.value === "custom"
@@ -83,13 +98,57 @@
         const isFolder = folders.some((folder) => folder.id === folderFilter.value);
         document.querySelector("#rename-folder").hidden = !isFolder;
         document.querySelector("#delete-folder").hidden = !isFolder;
-        if (!visibleCards.some((card) => card.id === selectedId)) {
-            selectCard(visibleCards.some((card) => card.id === preferredId) ? preferredId : visibleCards[0]?.id || null);
+        if (!pageCards.some((card) => card.id === selectedId)) {
+            selectCard(pageCards.some((card) => card.id === focusId) ? focusId : pageCards[0]?.id || null);
         }
         updateSelection();
         updateOrderControls();
         rememberView();
     }
+
+    const SIZE_KEY = "portfolio-grid-size";
+    const readSize = () => {
+        try { return localStorage.getItem(SIZE_KEY) === "4" ? 4 : 3; } catch { return 3; }
+    };
+    let gridSize = readSize();      // 3 ou 4
+    let pageSize = gridSize ** 2;   // 9 ou 16
+    let page = 0;
+    let pageCards = [];
+
+    const pager = document.createElement("nav");
+    pager.className = "pagination";
+    pager.setAttribute("aria-label", "Paginação do inventário");
+    const prevButton = text("button", "‹ Anterior", "secondary-button compact-button");
+    const nextButton = text("button", "Próxima ›", "secondary-button compact-button");
+    prevButton.type = nextButton.type = "button";
+    const pageLabel = text("span", "", "page-label");
+    pageLabel.setAttribute("aria-live", "polite");
+    pager.append(prevButton, pageLabel, nextButton);
+    grid.after(pager);
+
+    
+    const sizeLabel = document.createElement("label");
+    sizeLabel.className = "grid-size";
+    sizeLabel.append("Tamanho do grid ");
+    const sizeSelect = document.createElement("select");
+    sizeSelect.setAttribute("aria-label", "Tamanho do grid");
+    for (const [value, label] of [["3", "3 × 3 (9 por página)"], ["4", "4 × 4 (16 por página)"]]) {
+        const option = document.createElement("option");
+        option.value = value;
+        option.textContent = label;
+        sizeSelect.append(option);
+    }
+    sizeSelect.value = String(gridSize);
+    sizeLabel.append(sizeSelect);
+    grid.before(sizeLabel);
+
+    sizeSelect.addEventListener("change", () => {
+        if (busy) return;
+        gridSize = Number(sizeSelect.value) === 4 ? 4 : 3;
+        pageSize = gridSize ** 2;
+        try { localStorage.setItem(SIZE_KEY, String(gridSize)); } catch {}
+        renderInventory(selectedId); // mantém a carta selecionada visível
+    });
 
     function renderPrices(data) {
         const panel = details.querySelector(".market-content");
@@ -192,15 +251,15 @@
         }
     }
 
-    async function reorder(ids) {
+    async function reorder(ids, focusId = null) {
         if (sort.value !== "custom" || busy) return;
         if (ids.length > 450) { feedback.textContent = "Filtre uma pasta ou busca com até 450 cartas para reorganizar."; return; }
         if (await mutation("/api/portfolio/cards/bulk", "POST", { action: "reorder", card_ids: ids })) {
             const positions = ids.map((id) => cardById.get(id).position).sort((a, b) => a - b);
             ids.forEach((id, index) => { cardById.get(id).position = positions[index]; });
-            renderInventory();
+            renderInventory(focusId);
         }
-    }
+    }   
 
     function askDelete(title, message, operation) {
         pendingDelete = operation;
@@ -273,9 +332,11 @@
         const to = ids.indexOf(target);
         if (from < 0 || to < 0) return;
         ids.splice(from, 1); ids.splice(to, 0, draggedId);
+        const moved = draggedId;
         draggedId = null;
-        reorder(ids);
+        reorder(ids, moved);
     });
+
     grid.addEventListener("dragend", () => { draggedId = null; for (const cell of cells.values()) cell.classList.remove("dragging"); });
     details.addEventListener("click", (event) => {
         const action = event.target.closest("[data-action]")?.dataset.action;
@@ -289,22 +350,27 @@
             const to = from + (action === "earlier" ? -1 : 1);
             if (to < 0 || to >= ids.length) return;
             [ids[from], ids[to]] = [ids[to], ids[from]];
-            reorder(ids);
+            reorder(ids, selectedId);
         }
     });
     for (const input of [folderFilter, sort, search]) input.addEventListener("input", () => {
         if (busy) return;
         selection.clear();
+        page = 0;
         for (const cell of cells.values()) cell.querySelector(".select-card").checked = false;
         renderInventory();
     });
     selectAll.addEventListener("change", () => {
-        for (const card of visibleCards) {
+        for (const card of pageCards) {
             if (selectAll.checked) selection.add(card.id); else selection.delete(card.id);
             cells.get(card.id).querySelector(".select-card").checked = selectAll.checked;
         }
         updateSelection();
     });
+
+prevButton.addEventListener("click", () => { if (!busy) { page -= 1; renderInventory(); } });
+nextButton.addEventListener("click", () => { if (!busy) { page += 1; renderInventory(); } });       
+
     document.querySelector("#clear-selection").addEventListener("click", () => {
         selection.clear(); for (const cell of cells.values()) cell.querySelector(".select-card").checked = false; updateSelection();
     });

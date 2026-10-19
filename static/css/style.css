@@ -204,13 +204,22 @@ a:focus-visible, button:focus-visible, .camera-button:focus-within { outline: 3p
 .card-metadata dt { color: #94a3b8; }
 .card-metadata dd { margin: 0; }
 
-@media (min-width: 480px) {
-    .inventory-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.inventory-grid {
+    display: grid;
+    grid-template-columns: repeat(var(--grid-cols, 3), minmax(0, 1fr));
+    gap: 8px;
+    padding: 8px;
+    background: #0b1220;
+    border: 1px solid #334155;
+    border-radius: 12px;
 }
+
+.grid-size { display: flex; align-items: center; justify-content: flex-end; gap: 8px; margin-bottom: 8px; color: #cbd5e1; font-size: .8rem; }
+.grid-size select { padding: 6px 10px; border: 1px solid #475569; border-radius: 8px; background: #1e293b; color: white; font: inherit; }
 
 @media (min-width: 800px) {
     .inventory-layout { grid-template-columns: minmax(0, 1fr) 320px; align-items: start; }
-    .inventory-grid { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+    
     .card-details { position: sticky; top: 24px; }
 }
 
@@ -452,3 +461,6 @@ button:not(:disabled):active, .button-link:active, .camera-button:active { trans
     .add-bar { bottom: 0; margin: 0 -8px; border-radius: 14px 14px 0 0; }
     #card-entry-form #add-card-button { padding: 12px 14px; }
 }
+
+.pagination { display: flex; align-items: center; justify-content: center; gap: 16px; margin-top: 12px; }
+.pagination .page-label { color: #cbd5e1; font-size: .875rem; }
