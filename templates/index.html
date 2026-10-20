@@ -6,6 +6,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, init
     ial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>TCG Hub</title>
 
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
@@ -14,10 +15,8 @@
 
 <body>
     <main class="container entry-container">
-        <nav class="main-nav" aria-label="Navegação principal">
-            <a href="{{ url_for('home') }}" aria-current="page">Adicionar carta</a>
-            <a href="{{ url_for('portfolio') }}">Meu portfolio</a>
-        </nav>
+        {% with active='home' %}{% include '_nav.html' %}{% endwith %}
+        
 
         <header class="brand-header">
             <div class="brand-title">
@@ -93,6 +92,7 @@
         </form>
     </main>
 
+    <script src="{{ url_for('static', filename='js/session.js') }}"></script>
     <script src="{{ url_for('static', filename='js/price-view.js') }}"></script>
     <script src="{{ url_for('static', filename='js/camera.js') }}"></script>
     <script src="{{ url_for('static', filename='js/card-form.js') }}"></script>

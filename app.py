@@ -1,9 +1,10 @@
 import os
 import re
 from functools import wraps
+from urllib.parse import urlparse
 
 import requests
-from flask import Flask, jsonify, render_template, request, url_for
+from flask import Flask, g, jsonify, redirect, render_template, request, url_for
 
 from services.tcgdex import (
     find_card_candidates,
@@ -16,9 +17,17 @@ from services.tcgdex import (
 )
 from services.portfolio import (
     add_portfolio_card, list_portfolio_cards, get_portfolio_card,
-    list_portfolio_folders, create_portfolio_folder, rename_portfolio_folder,
+    list_portfolio_folders, create_portfolio_folder, update_portfolio_folder,
     delete_portfolio_folder, mutate_portfolio_cards, save_portfolio_prices,
     PortfolioNotFound
+)
+from services.auth import (
+    SESSION_COOKIE, SESSION_DURATION, AuthError, create_client_token, create_session, forget_session,
+    revoke_sessions, verify_session
+)
+from services.accounts import (
+    AccountError, clean_profile_update, ensure_account, find_profile_by_handle,
+    get_profile, public_view, update_profile
 )
 from services.market import get_market_prices, prices_are_fresh
 from services.firebase import FirebaseUnavailable
@@ -26,7 +35,18 @@ from services.ligapokemon import CARD_CONDITIONS, liga_link_for_card
 from services.pricing import get_international_prices, PRICING_VERSION
 
 app = Flask(__name__)
-app.config["DEV_USER_ID"] = os.getenv("DEV_USER_ID", "demo-user")
+# Só para desenvolvimento local e testes: entra direto como este uid, sem login.
+# Nunca configure em um servidor acessível por outras pessoas.
+app.config["DEV_AUTH_USER_ID"] = os.getenv("DEV_AUTH_USER_ID") or None
+# "auto" marca o cookie como Secure quando a requisição chega por HTTPS.
+app.config["SESSION_COOKIE_SECURE_MODE"] = os.getenv("SESSION_COOKIE_SECURE", "auto")
+_project_id = os.getenv("FIREBASE_PROJECT_ID")
+app.config["FIREBASE_WEB_CONFIG"] = {
+    "apiKey": os.getenv("FIREBASE_WEB_API_KEY"),
+    "authDomain": os.getenv("FIREBASE_AUTH_DOMAIN") or (f"{_project_id}.firebaseapp.com" if _project_id else None),
+    "projectId": _project_id,
+    "appId": os.getenv("FIREBASE_APP_ID"),
+}
 
 CARD_LANGUAGES = {
     "en", "pt-br", "es", "fr", "de", "it", "ja", "ko",
@@ -111,15 +131,194 @@ def catalog_prices(card_id):
     )
 
 
+class AuthRequired(Exception):
+    pass
+
+
+@app.before_request
+def load_session_user():
+    """O dono vem do cookie de sessão verificado; o navegador nunca escolhe o uid."""
+    g.user = None
+    if request.endpoint == "static":
+        return None
+    claims = verify_session(request.cookies.get(SESSION_COOKIE))
+    if claims:
+        g.user = {"uid": claims["uid"], "email": claims.get("email"), "name": claims.get("name"),
+                  "picture": claims.get("picture"), "email_verified": bool(claims.get("email_verified"))}
+    elif app.config["DEV_AUTH_USER_ID"]:
+        g.user = {"uid": app.config["DEV_AUTH_USER_ID"], "email": None, "name": "Desenvolvimento",
+                  "picture": None, "email_verified": False, "dev": True}
+    # O cookie SameSite=Lax já barra POST vindo de outros sites; a origem é conferida também.
+    if request.method not in ("GET", "HEAD", "OPTIONS"):
+        origin = request.headers.get("Origin")
+        if origin and urlparse(origin).netloc != request.host:
+            return jsonify(status="error", error="Origem da requisição não permitida."), 403
+    return None
+
+
 def get_current_user_id():
-    # Futuramente: UID do token Firebase Authentication validado no servidor.
-    # O navegador nunca escolhe o dono do inventário.
-    user_id = app.config["DEV_USER_ID"]
+    if not g.get("user"):
+        raise AuthRequired()
+    user_id = g.user["uid"]
     if not isinstance(user_id, str) or not user_id.strip() or "/" in user_id:
-        raise FirebaseUnavailable("Configure um DEV_USER_ID válido no servidor.")
+        raise AuthRequired()
     return user_id
 
+
+def safe_next(value):
+    # Só caminhos internos: evita redirecionar para outro site depois do login.
+    if isinstance(value, str) and value.startswith("/") and not value.startswith("//") and "\\" not in value:
+        return value
+    return url_for("home")
+
+
+@app.errorhandler(AuthRequired)
+def handle_auth_required(_error):
+    login_url = url_for("login_page", next=request.full_path.rstrip("?"))
+    if request.path.startswith("/api/") or request.path == "/scan":
+        return jsonify(status="error", error="Entre na sua conta para continuar.", login_url=login_url), 401
+    return redirect(login_url)
+
+
+def login_required(function):
+    @wraps(function)
+    def handle(*args, **kwargs):
+        get_current_user_id()
+        return function(*args, **kwargs)
+    return handle
+
+
+@app.context_processor
+def inject_user():
+    return {"current_user": g.get("user")}
+
+
+def profile_json(profile):
+    if not profile:
+        return None
+    fields = ("uid", "handle", "display_name", "bio", "avatar_url", "profile_visibility", "portfolio_visibility")
+    return {key: profile.get(key) for key in fields}
+
+
+@app.get("/entrar")
+def login_page():
+    if g.user and not g.user.get("dev"):
+        return redirect(safe_next(request.args.get("next")))
+    config = app.config["FIREBASE_WEB_CONFIG"]
+    configured = bool(config.get("apiKey") and config.get("projectId"))
+    return render_template("login.html", firebase_config=config if configured else None,
+                           next_url=safe_next(request.args.get("next")))
+
+
+@app.post("/api/auth/session")
+def start_session():
+    data = request.get_json(silent=True)
+    id_token = data.get("id_token") if isinstance(data, dict) else None
+    if not isinstance(id_token, str) or not 20 <= len(id_token) <= 4096:
+        return jsonify(status="error", error="Login inválido."), 400
+    try:
+        cookie, claims = create_session(id_token)
+        profile = ensure_account(claims)
+    except AuthError as error:
+        return jsonify(status="error", error=str(error)), 401
+    except FirebaseUnavailable as error:
+        return jsonify(status="error", error=str(error)), 503
+    except Exception:
+        app.logger.exception("Erro ao iniciar sessão")
+        return jsonify(status="error", error="Não foi possível entrar agora. Tente novamente."), 503
+    mode = app.config["SESSION_COOKIE_SECURE_MODE"]
+    response = jsonify(status="ok", profile=profile_json(profile), redirect_url=safe_next(data.get("next")))
+    response.set_cookie(
+        SESSION_COOKIE, cookie, max_age=int(SESSION_DURATION.total_seconds()), httponly=True,
+        secure=request.is_secure if mode == "auto" else mode == "1", samesite="Lax", path="/"
+    )
+    return response
+
+
+@app.post("/api/auth/logout")
+def end_session():
+    data = request.get_json(silent=True) or {}
+    forget_session(request.cookies.get(SESSION_COOKIE))
+    if data.get("everywhere") is True and g.user and not g.user.get("dev"):
+        try:
+            revoke_sessions(g.user["uid"])
+        except Exception:
+            app.logger.exception("Erro ao encerrar sessões")
+            return jsonify(status="error", error="Não foi possível encerrar as outras sessões."), 503
+    response = jsonify(status="ok", redirect_url=url_for("login_page"))
+    response.delete_cookie(SESSION_COOKIE, path="/")
+    return response
+
+
+@app.post("/api/auth/client-token")
+@login_required
+def client_token():
+    """Base do chat: o SDK do navegador entra como o mesmo uid, sem novo login."""
+    if g.user.get("dev"):
+        return jsonify(status="error", error="Indisponível na sessão de desenvolvimento."), 400
+    try:
+        return jsonify(status="ok", token=create_client_token(g.user["uid"]))
+    except Exception:
+        app.logger.exception("Erro ao emitir token do cliente")
+        return jsonify(status="error", error="Não foi possível conectar o chat agora."), 503
+
+
+@app.get("/api/me")
+@login_required
+def me():
+    try:
+        profile = get_profile(g.user["uid"])
+    except FirebaseUnavailable as error:
+        return jsonify(status="error", error=str(error)), 503
+    user = {key: value for key, value in g.user.items() if key != "dev"}
+    return jsonify(status="ok", user=user, profile=profile_json(profile))
+
+
+@app.patch("/api/me/profile")
+@login_required
+def edit_profile():
+    try:
+        changes = clean_profile_update(request.get_json(silent=True))
+        profile = update_profile(g.user["uid"], changes)
+    except AccountError as error:
+        return jsonify(status="error", error=str(error)), 400
+    except FirebaseUnavailable as error:
+        return jsonify(status="error", error=str(error)), 503
+    except Exception:
+        app.logger.exception("Erro ao atualizar perfil")
+        return jsonify(status="error", error="Não foi possível salvar o perfil. Tente novamente."), 503
+    return jsonify(status="ok", profile=profile_json(profile),
+                   public_url=url_for("public_profile", handle=profile["handle"], _external=True))
+
+
+@app.get("/perfil")
+@login_required
+def profile_page():
+    try:
+        profile = get_profile(g.user["uid"])
+    except FirebaseUnavailable as error:
+        return render_template("profile.html", profile=None, error=str(error)), 503
+    public_url = url_for("public_profile", handle=profile["handle"], _external=True) if profile else None
+    return render_template("profile.html", profile=profile, error=None, public_url=public_url)
+
+
+@app.get("/u/<handle>")
+def public_profile(handle):
+    try:
+        profile = find_profile_by_handle(handle)
+        view = None
+        if profile:
+            view = public_view(profile, list_portfolio_cards(profile["uid"]),
+                               list_portfolio_folders(profile["uid"]), (g.user or {}).get("uid"))
+    except FirebaseUnavailable as error:
+        return render_template("public_profile.html", view=None, error=str(error)), 503
+    if view is None:
+        # Perfil privado e inexistente respondem igual: não revelamos quem tem conta.
+        return render_template("public_profile.html", view=None, error=None), 404
+    return render_template("public_profile.html", view=view, error=None, language_labels=LANGUAGE_LABELS)
+
 @app.get("/portfolio")
+@login_required
 def portfolio():
     try:
         user_id = get_current_user_id()
@@ -146,6 +345,7 @@ def portfolio():
 
 def portfolio_api(function):
     @wraps(function)
+    @login_required
     def handle(*args, **kwargs):
         try:
             return function(*args, **kwargs)
@@ -193,8 +393,18 @@ def create_folder():
 @portfolio_api
 def rename_folder(folder_id):
     folder_id = portfolio_id(folder_id)
-    name = folder_name(portfolio_json())
-    rename_portfolio_folder(get_current_user_id(), folder_id, name)
+    data = portfolio_json()
+    changes = {}
+    if "name" in data:
+        changes["name"] = folder_name(data)
+    if "visibility" in data:
+        # Pasta pública aparece no perfil público mesmo com o portfólio privado.
+        if data["visibility"] not in ("private", "public"):
+            raise ValueError("Visibilidade inválida.")
+        changes["visibility"] = data["visibility"]
+    if not changes:
+        raise ValueError("Informe o nome ou a visibilidade da pasta.")
+    update_portfolio_folder(get_current_user_id(), folder_id, changes)
     return jsonify(status="ok")
 
 
@@ -270,6 +480,7 @@ def portfolio_prices(card_id):
 
 
 @app.post("/api/portfolio/cards")
+@login_required
 def create_portfolio_card():
     data = request.get_json(silent=True)
     if not isinstance(data, dict):
@@ -379,6 +590,7 @@ ALLOWED_IMAGE_TYPES = {
 
 
 @app.route("/")
+@login_required
 def home():
 
     return render_template(
@@ -388,6 +600,7 @@ def home():
 
 
 @app.route("/scan", methods=["POST"])
+@login_required
 def scan():
 
     print("\n--- NOVO SCAN ---")

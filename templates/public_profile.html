@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ (view.profile.display_name ~ ' (@' ~ view.profile.handle ~ ')') if view else 'Perfil' }} · TCG Hub</title>
+    {% if view and view.profile.profile_visibility != 'public' %}<meta name="robots" content="noindex">{% endif %}
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <main class="container profile-container">
+        {% with active='public' %}{% include '_nav.html' %}{% endwith %}
+        {% if error %}
+            <section class="empty-state" role="alert"><h2>Perfil indisponível</h2><p>{{ error }}</p></section>
+        {% elif not view %}
+            <section class="empty-state"><h2>Perfil não encontrado</h2>
+                <p>Este perfil não existe ou não é público.</p></section>
+        {% else %}
+            {% set profile = view.profile %}
+            {% if view.is_owner and (profile.profile_visibility != 'public') %}
+            <p class="price-warning profile-notice">Só você vê esta página: seu perfil está privado.
+                <a href="{{ url_for('profile_page') }}">Torná-lo público</a></p>
+            {% endif %}
+            <header class="profile-heading">
+                {% if profile.avatar_url %}<img class="avatar avatar-large" src="{{ profile.avatar_url }}" alt="" referrerpolicy="no-referrer">
+                {% else %}<span class="avatar avatar-large" aria-hidden="true">{{ (profile.display_name or profile.handle)[:1]|upper }}</span>{% endif %}
+                <div>
+                    <h1>{{ profile.display_name }}</h1>
+                    <p>@{{ profile.handle }} · {{ view.cards|length }} {{ 'carta visível' if view.cards|length == 1 else 'cartas visíveis' }}</p>
+                    {% if profile.bio %}<p class="profile-bio">{{ profile.bio }}</p>{% endif %}
+                </div>
+                {% if view.is_owner %}<a class="button-link compact-button" href="{{ url_for('profile_page') }}">Editar perfil</a>{% endif %}
+            </header>
+
+            {% if view.folders %}
+            <nav class="folder-chips" aria-label="Coleções compartilhadas">
+                <button type="button" class="chip-button" data-folder="" aria-pressed="true">Tudo</button>
+                {% for folder in view.folders %}<button type="button" class="chip-button" data-folder="{{ folder.id }}" aria-pressed="false">{{ folder.name }}</button>{% endfor %}
+            </nav>
+            {% endif %}
+
+            {% if view.cards %}
+            <section class="public-grid" aria-label="Cartas">
+                {% for card in view.cards %}
+                <article class="public-card" data-folder="{{ card.folder_id or '' }}">
+                    {% if card.image_url %}<img src="{{ card.image_url }}" alt="{{ card.name }}" loading="lazy">{% else %}<span class="image-placeholder">Sem imagem</span>{% endif %}
+                    <h2>{{ card.name }}</h2>
+                    <p>{{ card.set_name or 'Coleção não informada' }} · #{{ card.collector_number or '?' }}</p>
+                    <p class="public-card-tags">
+                        {% if card.variant %}<span>{{ {'normal': 'Normal', 'holo': 'Holo', 'reverse': 'Reverse'}.get(card.variant, card.variant) }}</span>{% endif %}
+                        {% if card.condition %}<span>{{ card.condition }}</span>{% endif %}
+                        {% if card.language and card.language != 'unknown' %}<span>{{ card.language|upper }}</span>{% endif %}
+                        {% if card.for_trade %}<span class="tag-trade">Para troca</span>{% endif %}
+                        {% if card.for_sale %}<span class="tag-sale">À venda</span>{% endif %}
+                    </p>
+                </article>
+                {% endfor %}
+            </section>
+            {% else %}
+            <section class="empty-state"><h2>Nada compartilhado ainda</h2>
+                <p>{{ 'Torne o portfólio público no seu perfil ou marque uma pasta como pública no portfólio.' if view.is_owner else 'Este colecionador ainda não compartilhou cartas.' }}</p></section>
+            {% endif %}
+        {% endif %}
+    </main>
+    <script src="{{ url_for('static', filename='js/session.js') }}"></script>
+    <script>
+        // Filtro por coleção compartilhada, sem recarregar a página.
+        document.querySelector(".folder-chips")?.addEventListener("click", (event) => {
+            const chip = event.target.closest("[data-folder]");
+            if (!chip) return;
+            for (const other of document.querySelectorAll(".chip-button")) other.setAttribute("aria-pressed", String(other === chip));
+            for (const card of document.querySelectorAll(".public-card")) card.hidden = Boolean(chip.dataset.folder) && card.dataset.folder !== chip.dataset.folder;
+        });
+    </script>
+</body>
+</html>

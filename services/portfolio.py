@@ -67,11 +67,13 @@ def create_portfolio_folder(user_id, name):
     from firebase_admin import firestore
 
     ref = _user_ref(user_id).collection("folders").document()
-    ref.set({"name": name, "created_at": firestore.SERVER_TIMESTAMP})
+    # Pastas nascem privadas; "public" as mostra no perfil público (/u/<handle>).
+    ref.set({"name": name, "visibility": "private", "created_at": firestore.SERVER_TIMESTAMP})
     return ref.id
 
 
-def rename_portfolio_folder(user_id, folder_id, name):
+def update_portfolio_folder(user_id, folder_id, changes):
+    """Renomeia e/ou muda a visibilidade ("private" | "public") de uma pasta."""
     from firebase_admin import firestore
 
     db = get_firestore_client()
@@ -80,9 +82,13 @@ def rename_portfolio_folder(user_id, folder_id, name):
     @firestore.transactional
     def save(transaction):
         _require(ref.get(transaction=transaction), "Pasta não encontrada.")
-        transaction.update(ref, {"name": name})
+        transaction.update(ref, changes)
 
     save(db.transaction())
+
+
+def rename_portfolio_folder(user_id, folder_id, name):
+    update_portfolio_folder(user_id, folder_id, {"name": name})
 
 
 def delete_portfolio_folder(user_id, folder_id):

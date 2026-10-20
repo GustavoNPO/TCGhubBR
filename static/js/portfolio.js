@@ -46,7 +46,7 @@
         selectAll.checked = pageCards.length > 0 && checked === pageCards.length;
         selectAll.indeterminate = checked > 0 && checked < pageCards.length;
         selectAll.disabled = busy || pageCards.length === 0;
-    }       
+    }
 
     function updateOrderControls() {
         const index = visibleCards.findIndex((card) => card.id === selectedId);
@@ -98,6 +98,7 @@
         const isFolder = folders.some((folder) => folder.id === folderFilter.value);
         document.querySelector("#rename-folder").hidden = !isFolder;
         document.querySelector("#delete-folder").hidden = !isFolder;
+        updateShareFolder();
         if (!pageCards.some((card) => card.id === selectedId)) {
             selectCard(pageCards.some((card) => card.id === focusId) ? focusId : pageCards[0]?.id || null);
         }
@@ -126,7 +127,7 @@
     pager.append(prevButton, pageLabel, nextButton);
     grid.after(pager);
 
-    
+
     const sizeLabel = document.createElement("label");
     sizeLabel.className = "grid-size";
     sizeLabel.append("Tamanho do grid ");
@@ -146,7 +147,7 @@
         if (busy) return;
         gridSize = Number(sizeSelect.value) === 4 ? 4 : 3;
         pageSize = gridSize ** 2;
-        try { localStorage.setItem(SIZE_KEY, String(gridSize)); } catch {}
+        try { localStorage.setItem(SIZE_KEY, String(gridSize)); } catch { }
         renderInventory(selectedId); // mantém a carta selecionada visível
     });
 
@@ -259,7 +260,7 @@
             ids.forEach((id, index) => { cardById.get(id).position = positions[index]; });
             renderInventory(focusId);
         }
-    }   
+    }
 
     function askDelete(title, message, operation) {
         pendingDelete = operation;
@@ -368,8 +369,8 @@
         updateSelection();
     });
 
-prevButton.addEventListener("click", () => { if (!busy) { page -= 1; renderInventory(); } });
-nextButton.addEventListener("click", () => { if (!busy) { page += 1; renderInventory(); } });       
+    prevButton.addEventListener("click", () => { if (!busy) { page -= 1; renderInventory(); } });
+    nextButton.addEventListener("click", () => { if (!busy) { page += 1; renderInventory(); } });
 
     document.querySelector("#clear-selection").addEventListener("click", () => {
         selection.clear(); for (const cell of cells.values()) cell.querySelector(".select-card").checked = false; updateSelection();
@@ -387,6 +388,29 @@ nextButton.addEventListener("click", () => { if (!busy) { page += 1; renderInven
         document.querySelector("#folder-feedback").textContent = "";
         document.querySelector("#folder-dialog").showModal();
     }
+    // Pasta pública aparece no perfil público (/u/<handle>), mesmo com o portfólio privado.
+    function updateShareFolder() {
+        const folder = folders.find((entry) => entry.id === folderFilter.value);
+        const button = document.querySelector("#share-folder");
+        const note = document.querySelector("#share-folder-note");
+        button.hidden = note.hidden = !folder;
+        if (!folder) return;
+        const isPublic = folder.visibility === "public";
+        button.textContent = isPublic ? "Tornar privada" : "Tornar pública";
+        note.textContent = isPublic
+            ? "Esta pasta aparece no seu perfil público (se o perfil estiver público)."
+            : "Esta pasta é privada. Tornar pública a mostra no seu perfil público.";
+    }
+    document.querySelector("#share-folder").addEventListener("click", async () => {
+        const folder = folders.find((entry) => entry.id === folderFilter.value);
+        if (!folder) return;
+        const visibility = folder.visibility === "public" ? "private" : "public";
+        if (await mutation(`/api/portfolio/folders/${encodeURIComponent(folder.id)}`, "PATCH", { visibility })) {
+            folder.visibility = visibility;
+            feedback.textContent = visibility === "public" ? `“${folder.name}” agora é pública.` : `“${folder.name}” agora é privada.`;
+            updateShareFolder();
+        }
+    });
     document.querySelector("#new-folder").addEventListener("click", () => editFolder());
     document.querySelector("#rename-folder").addEventListener("click", () => editFolder(folderFilter.value));
     document.querySelector("#folder-cancel").addEventListener("click", () => document.querySelector("#folder-dialog").close());

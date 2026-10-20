@@ -39,7 +39,7 @@
 </head>
 <body>
     <main class="container portfolio-container">
-        <nav class="main-nav" aria-label="Navegação principal"><a href="{{ url_for('home') }}">Scanner</a><a href="{{ url_for('portfolio') }}" aria-current="page">Meu portfólio</a></nav>
+        {% with active='portfolio' %}{% include '_nav.html' %}{% endwith %}
         <header class="portfolio-header">
             <div><span class="game-label">Sua coleção</span><h1>Meu portfólio</h1>{% if not error %}<p>{{ cards|length }} {{ 'carta' if cards|length == 1 else 'cartas' }} no inventário</p>{% endif %}</div>
             <a class="button-link" href="{{ url_for('home') }}">Adicionar carta</a>
@@ -52,8 +52,10 @@
                     <label>Pasta <select id="folder-filter"><option value="all">Todas as cartas</option><option value="none">Sem pasta</option>{% for folder in folders %}<option value="{{ folder.id }}">{{ folder.name }}</option>{% endfor %}</select></label>
                     <button type="button" id="new-folder" class="secondary-button">Nova pasta</button>
                     <button type="button" id="rename-folder" class="secondary-button" hidden>Renomear</button>
+                    <button type="button" id="share-folder" class="secondary-button" hidden aria-describedby="share-folder-note">Tornar pública</button>
                     <button type="button" id="delete-folder" class="danger-button" hidden>Excluir pasta</button>
                 </div>
+                <p id="share-folder-note" class="field-note folder-share-note" hidden></p>
                 <div class="inventory-filters">
                     <label>Buscar carta <input id="inventory-search" type="search" placeholder="Nome, coleção ou número"></label>
                     <label>Ordenar <select id="inventory-sort"><option value="custom">Minha ordem</option><option value="name">Nome (A–Z)</option><option value="set">Coleção (A–Z)</option><option value="recent">Mais recentes</option></select></label>
@@ -96,6 +98,7 @@
             <script id="portfolio-data" type="application/json">{{ {'cards': cards, 'folders': folders}|tojson }}</script>
         {% endif %}
     </main>
+    <script src="{{ url_for('static', filename='js/session.js') }}"></script>
     <script src="{{ url_for('static', filename='js/price-view.js') }}" defer></script>
     <script src="{{ url_for('static', filename='js/portfolio.js') }}" defer></script>
 </body>

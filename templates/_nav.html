@@ -1,0 +1,16 @@
+{# Navegação comum. Use com {% with active='home' %}{% include '_nav.html' %}{% endwith %}. #}
+<nav class="main-nav" aria-label="Navegação principal">
+    {% if current_user %}
+    <a href="{{ url_for('home') }}"{{ ' aria-current="page"'|safe if active == 'home' else '' }}>Adicionar carta</a>
+    <a href="{{ url_for('portfolio') }}"{{ ' aria-current="page"'|safe if active == 'portfolio' else '' }}>Meu portfólio</a>
+    <span class="nav-spacer" aria-hidden="true"></span>
+    <a class="nav-user" href="{{ url_for('profile_page') }}"{{ ' aria-current="page"'|safe if active == 'profile' else '' }}>
+        <span class="avatar" aria-hidden="true">{{ ((current_user.name or current_user.email or '?')|trim)[:1]|upper }}</span>
+        <span class="nav-user-name">{{ current_user.name or current_user.email or 'Minha conta' }}</span>
+    </a>
+    {% if not current_user.dev %}<button type="button" class="nav-logout" data-logout>Sair</button>{% endif %}
+    {% else %}
+    <span class="nav-spacer" aria-hidden="true"></span>
+    <a href="{{ url_for('login_page') }}"{{ ' aria-current="page"'|safe if active == 'login' else '' }}>Entrar</a>
+    {% endif %}
+</nav>

@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Meu perfil · TCG Hub</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <main class="container profile-container">
+        {% with active='profile' %}{% include '_nav.html' %}{% endwith %}
+        <header class="profile-heading">
+            <span class="avatar avatar-large" aria-hidden="true">{{ ((profile.display_name if profile else current_user.name) or '?')[:1]|upper }}</span>
+            <div>
+                <span class="game-label">Sua conta</span>
+                <h1>{{ profile.display_name if profile else 'Meu perfil' }}</h1>
+                {% if profile %}<p>@{{ profile.handle }}{% if current_user.email %} · {{ current_user.email }}{% endif %}</p>{% endif %}
+            </div>
+        </header>
+
+        {% if error %}
+            <section class="empty-state" role="alert"><h2>Perfil indisponível</h2><p>{{ error }}</p></section>
+        {% elif not profile %}
+            <section class="empty-state"><h2>Sessão de desenvolvimento</h2>
+                <p>Você está usando DEV_AUTH_USER_ID, sem conta real. Entre com uma conta para ter perfil.</p></section>
+        {% else %}
+            {% if not current_user.email_verified %}
+            <p class="price-warning profile-notice">Confirme seu e-mail pelo link que enviamos. A confirmação será exigida para conversar com outros colecionadores.</p>
+            {% endif %}
+            <form id="profile-form" class="flow-block profile-form" novalidate>
+                <h2 class="flow-heading">Perfil público</h2>
+                <label>Nome de exibição
+                    <input id="profile-name" maxlength="60" required value="{{ profile.display_name }}">
+                </label>
+                <label>Seu @
+                    <span class="handle-input"><span aria-hidden="true">@</span><input id="profile-handle" maxlength="24" required autocomplete="off" spellcheck="false" value="{{ profile.handle }}"></span>
+                    <span class="field-note">Endereço do seu perfil. Letras minúsculas, números e _.</span>
+                </label>
+                <label>Bio
+                    <textarea id="profile-bio" maxlength="280" rows="3" placeholder="O que você coleciona, o que procura para trocar…">{{ profile.bio }}</textarea>
+                </label>
+
+                <fieldset class="visibility-group">
+                    <legend>Quem pode ver</legend>
+                    <label class="switch-row">
+                        <input type="checkbox" id="profile-public"{{ ' checked' if profile.profile_visibility == 'public' else '' }}>
+                        <span><strong>Perfil público</strong><span class="field-note">Nome, @ e bio aparecem para qualquer pessoa com o link.</span></span>
+                    </label>
+                    <label class="switch-row">
+                        <input type="checkbox" id="portfolio-public"{{ ' checked' if profile.portfolio_visibility == 'public' else '' }}>
+                        <span><strong>Portfólio inteiro público</strong><span class="field-note">Desligado, só aparecem as pastas que você marcar como públicas no portfólio.</span></span>
+                    </label>
+                </fieldset>
+
+                <div class="share-row">
+                    <a id="public-link" href="{{ public_url }}" target="_blank" rel="noopener">{{ public_url }}</a>
+                    <button type="button" id="copy-link" class="secondary-button compact-button">Copiar link</button>
+                </div>
+                <button type="submit" id="profile-save">Salvar perfil</button>
+                <p id="profile-feedback" role="status"></p>
+            </form>
+
+            <section class="flow-block session-block" aria-labelledby="session-heading">
+                <h2 id="session-heading" class="flow-heading">Sessões</h2>
+                <p class="field-note">Sair aqui encerra só este navegador. Use a outra opção se entrou em um aparelho que não é seu.</p>
+                <div class="session-actions">
+                    <button type="button" class="secondary-button" data-logout>Sair</button>
+                    <button type="button" class="danger-button" data-logout="everywhere">Sair de todos os dispositivos</button>
+                </div>
+                <p data-session-status role="status"></p>
+            </section>
+        {% endif %}
+    </main>
+    <script src="{{ url_for('static', filename='js/session.js') }}"></script>
+    {% if profile %}<script src="{{ url_for('static', filename='js/profile.js') }}"></script>{% endif %}
+</body>
+</html>
