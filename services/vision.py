@@ -57,6 +57,15 @@ class CardExtraction(BaseModel):
         )
     )
 
+    set_code: Optional[str] = Field(
+        default=None,
+        description=(
+            "Set code printed on the card, when visible. "
+            "Magic: the 3-5 character code at the bottom left, "
+            "e.g. M11, DMU, MH3. Return null for Pokemon."
+        )
+    )
+
     language: Literal[
         "en",
         "pt-br",
@@ -66,6 +75,7 @@ class CardExtraction(BaseModel):
         "it",
         "ja",
         "ko",
+        "ru",
         "zh-tw",
         "zh-cn",
         "unknown"
@@ -109,6 +119,7 @@ SUPPORTED LANGUAGES:
 - it
 - ja
 - ko
+- ru
 - zh-tw
 - zh-cn
 - unknown
@@ -137,6 +148,12 @@ power or other gameplay statistics.
 
 9. confidence must represent how confident you are that the
 identifying information was correctly read.
+
+10. Magic: The Gathering cards print the collector number and
+the set code at the bottom left, e.g. "0149 C / M11 • PT" or
+"149/249 C / M11 • EN". Return the number in collector_number,
+its main part in local_id and the set code in set_code. The
+two-letter code after the set code is the language.
 
 Examples:
 
@@ -168,6 +185,22 @@ search_name: Charizard
 collector_number: 006/165
 local_id: 006
 language: ja
+
+A Portuguese Magic card showing:
+
+Raio
+149/249 C
+M11 • PT
+
+may produce:
+
+game: magic
+printed_name: Raio
+search_name: Lightning Bolt
+collector_number: 149/249
+local_id: 149
+set_code: M11
+language: pt-br
 
 Only provide search_name when you are confident about it.
 """

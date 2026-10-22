@@ -30,6 +30,12 @@
         <form id="card-entry-form" class="entry-flow" novalidate>
             <section class="flow-block" aria-labelledby="identify-heading">
                 <h2 id="identify-heading" class="flow-heading"><span aria-hidden="true">1</span>Identifique a carta</h2>
+                <!-- A foto troca o jogo sozinha; a escolha manual vale para a busca digitada. -->
+                <fieldset class="chip-group game-switch">
+                    <legend>Jogo</legend>
+                    <label class="chip"><input type="radio" name="game" value="pokemon" checked><span>Pokémon</span></label>
+                    <label class="chip"><input type="radio" name="game" value="magic"><span>Magic</span></label>
+                </fieldset>
                 <div class="identify-row">
                     <label class="camera-button" title="Fotografar a carta">
                         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 4h6l1.5 2H20a1 1 0 0 1 1 1v11a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h3.5z"/><circle cx="12" cy="12.5" r="3.5"/></svg>

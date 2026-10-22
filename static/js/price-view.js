@@ -1,8 +1,10 @@
 /* A mesma apresentação de preços no cadastro e no portfólio. */
 window.TCGPrices = (() => {
     const version = 3;
-    const labels = { normal: "Normal", holo: "Holográfica", reverse: "Holográfica reversa" };
-    const finishes = ["normal", "holo", "reverse"];
+    // Pokémon: normal/holo/reverse. Magic: nonfoil/foil/etched. Só aparecem os do jogo da carta.
+    const labels = { normal: "Normal", holo: "Holográfica", reverse: "Holográfica reversa",
+        nonfoil: "Normal (não foil)", foil: "Foil", etched: "Foil etched" };
+    const finishes = ["normal", "holo", "reverse", "nonfoil", "foil", "etched"];
     const node = (tag, value, className) => {
         const element = document.createElement(tag);
         if (value !== undefined) element.textContent = value;
@@ -68,12 +70,14 @@ window.TCGPrices = (() => {
     function liga(panel, link) {
         panel.replaceChildren();
         if (!link?.url) return;
-        const anchor = node("a", "Conferir preço na Liga", "button-link liga-button");
+        const anchor = node("a", link.label || "Conferir preço na Liga", "button-link liga-button");
         anchor.href = link.url; anchor.target = "_blank"; anchor.rel = "noopener noreferrer";
         anchor.append(node("span", " ↗", "external-mark"));
-        panel.append(anchor, node("p", link.exact
+        // A Liga Magic abre a página da carta com todas as edições: a nota indica qual escolher.
+        panel.append(anchor, node("p", link.note || (link.exact
             ? `Abre a carta na Liga: edição ${link.edition_code} · nº ${link.number}.`
-            : "Edição sem correspondência confirmada na Liga: confira a coleção e o número na busca.", link.exact ? "price-note" : "price-warning"));
+            : "Edição sem correspondência confirmada na Liga: confira a coleção e o número na busca."),
+            link.exact || link.note ? "price-note" : "price-warning"));
     }
 
     function snapshot(panel, data) {

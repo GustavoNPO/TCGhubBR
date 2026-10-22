@@ -73,7 +73,11 @@ def get_catalog_prices(card, variant=""):
                     "price_scope": "international_reference", "physical_language_matched": False,
                     "condition_matched": False
                 })
+    return with_brl_estimates(quotes)
 
+
+def with_brl_estimates(quotes):
+    """Converte cada cotação para reais, mantendo o valor original se o câmbio falhar."""
     valid_quotes = []
     exchanges = {}
     for quote in quotes:
@@ -108,6 +112,42 @@ def get_international_prices(card, variant="", catalog_language="en"):
             english = get_card_details(card["id"], "en")
             if english:
                 quotes = get_catalog_prices(english, variant)
+        except (requests.RequestException, ValueError):
+            pass
+    return quotes
+
+
+def get_mtg_quotes(card, variant=""):
+    """Preços por acabamento que o Scryfall repassa do TCGplayer (USD) e do Cardmarket (EUR)."""
+    prices = card.get("prices") or {}
+    finishes = card.get("finishes") or []
+    fields = {"nonfoil": ("usd", "eur", "tcgplayer_id"), "foil": ("usd_foil", "eur_foil", "tcgplayer_id"),
+              "etched": ("usd_etched", None, "tcgplayer_etched_id")}
+    quotes = []
+    for finish, (usd, eur, tcgplayer_id) in fields.items():
+        if (variant and variant != finish) or finish not in finishes:
+            continue
+        common = {"variant": finish, "updated_at": None, "price_scope": "international_reference",
+                  "physical_language_matched": False, "condition_matched": False}
+        amount = _positive_amount(prices.get(usd))
+        if amount:
+            quotes.append({**common, "source": "TCGplayer", "amount": amount, "currency": "USD",
+                           "price_type": "market", "product_id": card.get(tcgplayer_id) or card.get("tcgplayer_id")})
+        elif eur and _positive_amount(prices.get(eur)):
+            quotes.append({**common, "source": "Cardmarket", "amount": _positive_amount(prices.get(eur)),
+                           "currency": "EUR", "price_type": "trend", "product_id": card.get("cardmarket_id")})
+    return with_brl_estimates(quotes)
+
+
+def get_mtg_international_prices(card, variant=""):
+    quotes = get_mtg_quotes(card, variant)
+    if not quotes and card.get("lang") != "en":
+        # Impressões em outros idiomas raramente têm preço; a mesma coleção e número em inglês é a referência.
+        from services.scryfall import get_mtg_print
+        try:
+            english = get_mtg_print(card.get("set"), card.get("collector_number"), "en")
+            if english:
+                quotes = get_mtg_quotes(english, variant)
         except (requests.RequestException, ValueError):
             pass
     return quotes

@@ -47,6 +47,8 @@
                     <h2>{{ card.name }}</h2>
                     <p>{{ card.set_name or 'Coleção não informada' }} · #{{ card.collector_number or '?' }}</p>
                     <p class="public-card-tags">
+                          <span>{{ 'Magic' if card.game == 'magic' else 'Pokémon' }}</span>
+                        {% if card.variant %}<span>{{ {'normal': 'Normal', 'holo': 'Holo', 'reverse': 'Reverse', 'nonfoil': 'Normal', 'foil': 'Foil', 'etched': 'Foil etched'}.get(card.variant, card.variant) }}</span>{% endif %}
                         {% if card.variant %}<span>{{ {'normal': 'Normal', 'holo': 'Holo', 'reverse': 'Reverse'}.get(card.variant, card.variant) }}</span>{% endif %}
                         {% if card.condition %}<span>{{ card.condition }}</span>{% endif %}
                         {% if card.language and card.language != 'unknown' %}<span>{{ card.language|upper }}</span>{% endif %}

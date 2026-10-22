@@ -11,6 +11,12 @@
     const sort = document.querySelector("#inventory-sort");
     const feedback = document.querySelector("#portfolio-feedback");
     const selectAll = document.querySelector("#select-all");
+    const bulkFolder = document.querySelector("#bulk-folder");
+    const gameTabs = [...document.querySelectorAll(".game-tab")];
+    // Cartas e pastas anteriores ao Magic não têm o campo e são de Pokémon.
+    const gameOf = (entry) => entry?.game || "pokemon";
+    const gameCount = (game) => cards.filter((card) => gameOf(card) === game).length;
+    let currentGame = gameCount("pokemon") === 0 && gameCount("magic") > 0 ? "magic" : "pokemon";
     const selection = new Set();
     const prices = new Map();
     const fetchedAt = new Map();
@@ -32,7 +38,7 @@
 
     function rememberView() {
         const url = new URL(window.location.href);
-        for (const [key, value] of [["folder", folderFilter.value], ["q", search.value], ["sort", sort.value], ["card", selectedId || ""]]) {
+        for (const [key, value] of [["game", currentGame], ["folder", folderFilter.value], ["q", search.value], ["sort", sort.value], ["card", selectedId || ""]]) {
             if (value) url.searchParams.set(key, value);
             else url.searchParams.delete(key);
         }
@@ -56,9 +62,23 @@
         if (later) later.disabled = busy || sort.value !== "custom" || index < 0 || index === visibleCards.length - 1;
     }
 
+    /* Abas de jogo e listas de pastas mostram só o jogo atual. */
+    function renderGameControls() {
+        for (const tab of gameTabs) {
+            tab.setAttribute("aria-pressed", String(tab.dataset.game === currentGame));
+            tab.querySelector(".game-count").textContent = gameCount(tab.dataset.game);
+        }
+        const option = (value, label) => { const node = text("option", label); node.value = value; return node; };
+        const gameFolders = folders.filter((folder) => gameOf(folder) === currentGame).map((folder) => [folder.id, folder.name]);
+        const previous = folderFilter.value;
+        folderFilter.replaceChildren(...[["all", "Todas as cartas"], ["none", "Sem pasta"], ...gameFolders].map(([id, name]) => option(id, name)));
+        folderFilter.value = [...folderFilter.options].some((entry) => entry.value === previous) ? previous : "all";
+        bulkFolder.replaceChildren(...[["", "Sem pasta"], ...gameFolders].map(([id, name]) => option(id, name)));
+    }
+
     function renderInventory(focusId = null) {
         const query = normalize(search.value.trim());
-        visibleCards = cards.filter((card) => (
+        visibleCards = cards.filter((card) => gameOf(card) === currentGame && (
             folderFilter.value === "all" || (folderFilter.value === "none" ? !card.folder_id : card.folder_id === folderFilter.value)
         ) && normalize(`${card.name} ${card.set_name || ""} ${card.collector_number || ""}`).includes(query));
         visibleCards.sort((a, b) => {
@@ -91,7 +111,8 @@
         nextButton.disabled = busy || page >= pageCount - 1;
 
         document.querySelector("#inventory-empty").hidden = visibleCards.length > 0;
-        document.querySelector("#inventory-count").textContent = `${visibleCards.length} de ${cards.length} carta(s)`;
+        document.querySelector("#inventory-count").textContent = `${visibleCards.length} de ${gameCount(currentGame)} carta(s)`;
+        for (const tab of gameTabs) tab.disabled = busy;
         document.querySelector("#order-hint").textContent = sort.value === "custom"
             ? "Arraste as cartas para organizar, ou use as setas nos detalhes."
             : "Selecione Minha ordem para reorganizar as cartas.";
@@ -282,6 +303,7 @@
                     }
                     document.querySelector("#confirm-dialog").close();
                     document.querySelector(".portfolio-header p").textContent = `${cards.length} carta(s) no inventário`;
+                    renderGameControls();
                     renderInventory();
                     feedback.focus();
                 }
@@ -354,12 +376,19 @@
             reorder(ids, selectedId);
         }
     });
-    for (const input of [folderFilter, sort, search]) input.addEventListener("input", () => {
-        if (busy) return;
+    function resetView() {
         selection.clear();
         page = 0;
         for (const cell of cells.values()) cell.querySelector(".select-card").checked = false;
         renderInventory();
+    }
+    for (const input of [folderFilter, sort, search]) input.addEventListener("input", () => { if (!busy) resetView(); });
+    for (const tab of gameTabs) tab.addEventListener("click", () => {
+        if (busy || tab.dataset.game === currentGame) return;
+        currentGame = tab.dataset.game;
+        folderFilter.value = "all";
+        renderGameControls();
+        resetView();
     });
     selectAll.addEventListener("change", () => {
         for (const card of pageCards) {
@@ -375,7 +404,7 @@
     document.querySelector("#clear-selection").addEventListener("click", () => {
         selection.clear(); for (const cell of cells.values()) cell.querySelector(".select-card").checked = false; updateSelection();
     });
-    document.querySelector("#bulk-move").addEventListener("click", () => moveCards([...selection], document.querySelector("#bulk-folder").value));
+    document.querySelector("#bulk-move").addEventListener("click", () => moveCards([...selection], bulkFolder.value));
     document.querySelector("#bulk-delete").addEventListener("click", () => deleteCards([...selection]));
     document.querySelector("#confirm-cancel").addEventListener("click", () => document.querySelector("#confirm-dialog").close());
     document.querySelector("#confirm-delete").addEventListener("click", () => { if (pendingDelete && !busy) pendingDelete(); });
@@ -419,7 +448,10 @@
         const form = event.target;
         if (!form.reportValidity()) return;
         const success = await mutation(editingFolder ? `/api/portfolio/folders/${encodeURIComponent(editingFolder)}` : "/api/portfolio/folders",
-            editingFolder ? "PATCH" : "POST", { name: document.querySelector("#folder-name").value });
+            editingFolder ? "PATCH" : "POST", editingFolder
+                ? { name: document.querySelector("#folder-name").value }
+                // A pasta nova pertence ao jogo da aba aberta.
+                : { name: document.querySelector("#folder-name").value, game: currentGame });
         if (success) { rememberView(); window.location.reload(); }
     });
     document.querySelector("#delete-folder").addEventListener("click", () => {
@@ -434,6 +466,8 @@
     for (const dialog of document.querySelectorAll("dialog")) dialog.addEventListener("cancel", (event) => { if (busy) event.preventDefault(); });
 
     const view = new URL(window.location.href).searchParams;
+    if (gameTabs.some((tab) => tab.dataset.game === view.get("game"))) currentGame = view.get("game");
+    renderGameControls();
     if ([...folderFilter.options].some((option) => option.value === view.get("folder"))) folderFilter.value = view.get("folder");
     if ([...sort.options].some((option) => option.value === view.get("sort"))) sort.value = view.get("sort");
     search.value = view.get("q") || "";

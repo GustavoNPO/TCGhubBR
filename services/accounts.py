@@ -192,13 +192,14 @@ def public_view(profile, cards, folders, viewer_uid=None):
     else:
         ids = {folder["id"] for folder in public_folders}
         visible = [card for card in cards if card.get("folder_id") in ids]
-    fields = ("id", "name", "set_name", "collector_number", "image_url", "variant", "language",
+    fields = ("id", "game", "name", "set_name", "collector_number", "image_url", "variant", "language",
               "condition", "folder_id", "for_trade", "for_sale")
     return {
         "profile": {key: profile.get(key) for key in ("uid", "handle", "display_name", "bio", "avatar_url",
                                                        "profile_visibility", "portfolio_visibility", "created_at")},
         "cards": [{key: card.get(key) for key in fields} for card in visible],
-        "folders": [{"id": folder["id"], "name": folder["name"]} for folder in public_folders],
+        "folders": [{"id": folder["id"], "name": folder["name"], "game": folder.get("game") or "pokemon"}
+                    for folder in public_folders],
         "is_owner": owner
     }
 

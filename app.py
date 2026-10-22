@@ -15,8 +15,22 @@ from services.tcgdex import (
     is_physical_card,
     normalize_number
 )
+from services.scryfall import (
+    find_mtg_candidates,
+    get_mtg_card,
+    get_mtg_sets,
+    search_mtg_cards,
+    card_finishes,
+    card_images,
+    catalog_language as mtg_catalog_language,
+    clean_number as mtg_clean_number,
+    english_name as mtg_english_name,
+    is_paper_card,
+    printed_name as mtg_printed_name,
+    MTG_FINISHES
+)
 from services.portfolio import (
-    add_portfolio_card, list_portfolio_cards, get_portfolio_card,
+    GAMES, add_portfolio_card, list_portfolio_cards, get_portfolio_card,
     list_portfolio_folders, create_portfolio_folder, update_portfolio_folder,
     delete_portfolio_folder, mutate_portfolio_cards, save_portfolio_prices,
     PortfolioNotFound
@@ -31,8 +45,9 @@ from services.accounts import (
 )
 from services.market import get_market_prices, prices_are_fresh
 from services.firebase import FirebaseUnavailable
+from services.ligamagic import liga_magic_link_for_card
 from services.ligapokemon import CARD_CONDITIONS, liga_link_for_card
-from services.pricing import get_international_prices, PRICING_VERSION
+from services.pricing import get_international_prices, get_mtg_international_prices, PRICING_VERSION
 
 app = Flask(__name__)
 # Só para desenvolvimento local e testes: entra direto como este uid, sem login.
@@ -49,13 +64,13 @@ app.config["FIREBASE_WEB_CONFIG"] = {
 }
 
 CARD_LANGUAGES = {
-    "en", "pt-br", "es", "fr", "de", "it", "ja", "ko",
+    "en", "pt-br", "es", "fr", "de", "it", "ja", "ko", "ru",
     "zh-tw", "zh-cn", "unknown"
 }
 LANGUAGE_LABELS = {
     "en": "Inglês", "pt-br": "Português (Brasil)", "es": "Espanhol",
     "fr": "Francês", "de": "Alemão", "it": "Italiano", "ja": "Japonês",
-    "ko": "Coreano", "zh-tw": "Chinês tradicional",
+    "ko": "Coreano", "ru": "Russo", "zh-tw": "Chinês tradicional",
     "zh-cn": "Chinês simplificado", "unknown": "Não identificado"
 }
 CATALOG_LANGUAGES = (CARD_LANGUAGES - {"unknown"}) | {"pt"}
@@ -63,7 +78,13 @@ CATALOG_LANGUAGE_LABELS = {
     **{code: label for code, label in LANGUAGE_LABELS.items() if code != "unknown"},
     "pt": "Português (catálogo pt)"
 }
-CARD_VARIANTS = {"normal", "holo", "reverse"}
+CARD_VARIANTS = {"pokemon": {"normal", "holo", "reverse"}, "magic": set(MTG_FINISHES)}
+PROVIDERS = {"pokemon": "tcgdex", "magic": "scryfall"}
+
+
+def request_game():
+    game = request.args.get("game", "pokemon")
+    return game if game in GAMES else None
 
 
 @app.get("/api/cards/search")
@@ -74,16 +95,18 @@ def catalog_search():
     set_id = request.args.get("set_id", "").strip()
     page_value = request.args.get("page", "1")
     page = int(page_value) if re.fullmatch(r"[0-9]{1,3}", page_value) else None
+    game = request_game()
     if (
-        (name and not 2 <= len(name) <= 120) or len(number) > 50
+        not game or (name and not 2 <= len(name) <= 120) or len(number) > 50
         or not (name or number or set_id) or language not in CATALOG_LANGUAGES | {"auto"}
         or (set_id and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,79}", set_id))
         or page is None or not 1 <= page <= 100
-        or (number and not re.fullmatch(r"[A-Za-z0-9]+(?:\s*/\s*[A-Za-z0-9]+)?", number))
+        or (number and not re.fullmatch(r"[A-Za-z0-9-]+(?:\s*/\s*[A-Za-z0-9]+)?", number))
     ):
         return jsonify(status="error", error="Informe o nome ou use coleção e número para encontrar a carta."), 400
     try:
-        cards = search_catalog_cards(name, number, language, set_id)
+        search = search_mtg_cards if game == "magic" else search_catalog_cards
+        cards = search(name, number, language, set_id)
     except (requests.RequestException, ValueError):
         return jsonify(status="error", error="Catálogo indisponível. Tente buscar novamente."), 502
     start = (page - 1) * 12
@@ -93,8 +116,11 @@ def catalog_search():
 
 @app.get("/api/sets")
 def catalog_sets():
+    game = request_game()
+    if not game:
+        return jsonify(status="error", sets=[], message="Jogo inválido."), 400
     try:
-        return jsonify(status="ok", sets=get_catalog_sets())
+        return jsonify(status="ok", sets=get_mtg_sets() if game == "magic" else get_catalog_sets())
     except (requests.RequestException, ValueError):
         return jsonify(status="unavailable", sets=[], message="Coleções indisponíveis. Você pode continuar buscando por nome."), 502
 
@@ -103,12 +129,15 @@ def catalog_sets():
 def catalog_prices(card_id):
     language = request.args.get("catalog_language", "en")
     variant = request.args.get("variant", "")
+    game = request_game()
     if (
-        not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,119}", card_id)
+        not game or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,119}", card_id)
         or language not in CATALOG_LANGUAGES
-        or variant not in CARD_VARIANTS | {""}
+        or variant not in CARD_VARIANTS[game] | {""}
     ):
         return jsonify(status="error", error="Dados da carta inválidos."), 400
+    if game == "magic":
+        return mtg_catalog_prices(card_id, variant)
     try:
         card = get_card_details(card_id, language)
         if card is None:
@@ -127,6 +156,28 @@ def catalog_prices(card_id):
         card={"name": card["name"], "image": card.get("image"), "set_name": (card.get("set") or {}).get("name"),
               "local_id": card.get("localId"), "set_total": (card.get("set") or {}).get("cardCount", {}).get("official"),
               "variants": card.get("variants") or {}},
+        message="Referência do exterior. A conversão não confirma o valor da carta no Brasil, seu idioma ou conservação."
+    )
+
+
+def mtg_catalog_prices(card_id, variant):
+    try:
+        card = get_mtg_card(card_id)
+        if card is None:
+            return jsonify(status="error", error="Carta não encontrada."), 404
+        if not is_paper_card(card):
+            return jsonify(status="error", error="Esta carta é só digital. Busque uma edição física."), 400
+        quotes = get_mtg_international_prices(card, variant)
+    except (requests.RequestException, ValueError):
+        return jsonify(status="unavailable", quotes=[], message="Referência internacional indisponível."), 502
+    thumb, image = card_images(card)
+    return jsonify(
+        status="ok" if quotes else "unavailable", quotes=quotes,
+        catalog_language=mtg_catalog_language(card), pricing_version=PRICING_VERSION,
+        liga=liga_magic_link_for_card(card),
+        card={"name": mtg_printed_name(card), "image": None, "image_url": image, "thumb_url": thumb,
+              "set_name": card.get("set_name"), "local_id": card.get("collector_number"), "set_total": None,
+              "variants": card_finishes(card)},
         message="Referência do exterior. A conversão não confirma o valor da carta no Brasil, seu idioma ou conservação."
     )
 
@@ -384,8 +435,11 @@ def folder_name(data):
 @app.post("/api/portfolio/folders")
 @portfolio_api
 def create_folder():
-    name = folder_name(portfolio_json())
-    folder_id = create_portfolio_folder(get_current_user_id(), name)
+    data = portfolio_json()
+    game = data.get("game", "pokemon")
+    if game not in GAMES:
+        raise ValueError("Jogo inválido.")
+    folder_id = create_portfolio_folder(get_current_user_id(), folder_name(data), game)
     return jsonify(status="ok", folder_id=folder_id), 201
 
 
@@ -486,9 +540,10 @@ def create_portfolio_card():
     if not isinstance(data, dict):
         return jsonify(status="error", error="Envie um objeto JSON válido."), 400
 
-    if data.get("game") != "pokemon" or data.get("provider") != "tcgdex":
+    game = data.get("game")
+    if game not in GAMES or data.get("provider") != PROVIDERS[game]:
         return jsonify(
-            status="error", error="Somente Pokémon via TCGdex está disponível."
+            status="error", error="Jogo ou catálogo não disponível."
         ), 400
 
     external_id = data.get("external_id")
@@ -508,7 +563,7 @@ def create_portfolio_card():
             not isinstance(condition, str) or condition not in CARD_CONDITIONS
         ))
         or (variant is not None and (
-            not isinstance(variant, str) or variant not in CARD_VARIANTS
+            not isinstance(variant, str) or variant not in CARD_VARIANTS[game]
         ))
         or (
             collector_number is not None and (
@@ -517,6 +572,9 @@ def create_portfolio_card():
         )
     ):
         return jsonify(status="error", error="Dados da carta inválidos."), 400
+
+    if game == "magic":
+        return create_mtg_portfolio_card(external_id, language, collector_number, condition, variant)
 
     try:
         user_id = get_current_user_id()
@@ -576,6 +634,52 @@ def create_portfolio_card():
     return jsonify(
         status="ok", card_id=card_id, redirect_url=url_for("portfolio")
     ), 201
+
+
+def create_mtg_portfolio_card(external_id, language, collector_number, condition, variant):
+    try:
+        user_id = get_current_user_id()
+        # Nome, coleção e imagem vêm do Scryfall, não do navegador.
+        card = get_mtg_card(external_id)
+        if card is None:
+            return jsonify(status="error", error="Carta não encontrada no catálogo. Faça outro scan."), 404
+        if not is_paper_card(card):
+            return jsonify(status="error", error="Cartas só digitais não podem ser adicionadas como carta física."), 400
+        if variant and not card_finishes(card).get(variant):
+            return jsonify(status="error", error="Este acabamento não existe para a impressão escolhida."), 400
+        if collector_number and mtg_clean_number(collector_number) != mtg_clean_number(card.get("collector_number")):
+            return jsonify(status="error", error="O número não corresponde à carta selecionada."), 400
+        _thumb, image = card_images(card)
+        item = {
+            "game": "magic",
+            "provider": "scryfall",
+            "external_id": card["id"],
+            "name": mtg_printed_name(card),
+            "english_name": mtg_english_name(card),
+            "collector_number": card.get("collector_number"),
+            "set_name": card.get("set_name"),
+            "set_id": card.get("set"),
+            "set_total": None,
+            "folder_id": None,
+            "image_url": image,
+            "language": language,
+            "catalog_language": mtg_catalog_language(card),
+            "condition": condition,
+            "variant": variant,
+            "favorite": False,
+            "for_trade": False,
+            "for_sale": False
+        }
+        card_id = add_portfolio_card(user_id, item)
+    except FirebaseUnavailable as error:
+        return jsonify(status="error", error=str(error)), 503
+    except (requests.RequestException, ValueError):
+        app.logger.exception("Erro ao consultar detalhes no Scryfall")
+        return jsonify(status="error", error="Catálogo indisponível. Tente confirmar novamente."), 502
+    except Exception:
+        app.logger.exception("Erro ao salvar carta no portfolio")
+        return jsonify(status="error", error="Não foi possível salvar a carta. Tente novamente."), 503
+    return jsonify(status="ok", card_id=card_id, redirect_url=url_for("portfolio", game="magic")), 201
 
 
 # Limite máximo de upload: 10 MB
@@ -707,13 +811,13 @@ def scan():
         )
 
 
-        # Por enquanto só integramos Pokémon.
+        # Pokémon (TCGdex) e Magic (Scryfall) têm catálogo.
         #
-        # Magic, Digimon e Star Wars já podem
+        # Digimon e Star Wars já podem
         # ser reconhecidos pelo Gemini,
         # mas ainda não possuem provider.
 
-        if card_info.game != "pokemon":
+        if card_info.game not in GAMES:
 
             return jsonify({
 
@@ -733,15 +837,24 @@ def scan():
 
 
         # =========================
-        # 6. BUSCAR NO TCGDEX
+        # 6. BUSCAR NO CATÁLOGO DO JOGO
         # =========================
 
-        print("Buscando candidatos no TCGdex...")
+        if card_info.game == "magic":
 
+            print("Buscando candidatos no Scryfall...")
 
-        candidates = find_card_candidates(
-            card_info
-        )
+            candidates = find_mtg_candidates(
+                card_info
+            )
+
+        else:
+
+            print("Buscando candidatos no TCGdex...")
+
+            candidates = find_card_candidates(
+                card_info
+            )
 
 
         print(

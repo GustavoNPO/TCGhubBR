@@ -1,8 +1,16 @@
 from services.firebase import get_firestore_client
 
 
+GAMES = ("pokemon", "magic")
+
+
 class PortfolioNotFound(ValueError):
     pass
+
+
+def game_of(entry):
+    """Cartas e pastas anteriores ao Magic não têm o campo e são de Pokémon."""
+    return (entry or {}).get("game") or "pokemon"
 
 
 def _user_ref(user_id):
@@ -63,12 +71,15 @@ def list_portfolio_folders(user_id):
     )
 
 
-def create_portfolio_folder(user_id, name):
+def create_portfolio_folder(user_id, name, game="pokemon"):
     from firebase_admin import firestore
 
+    if game not in GAMES:
+        raise ValueError("Jogo inválido.")
     ref = _user_ref(user_id).collection("folders").document()
     # Pastas nascem privadas; "public" as mostra no perfil público (/u/<handle>).
-    ref.set({"name": name, "visibility": "private", "created_at": firestore.SERVER_TIMESTAMP})
+    # Cada pasta pertence a um jogo: Pokémon e Magic ficam em pastas separadas.
+    ref.set({"name": name, "game": game, "visibility": "private", "created_at": firestore.SERVER_TIMESTAMP})
     return ref.id
 
 
@@ -125,12 +136,15 @@ def mutate_portfolio_cards(user_id, card_ids, action, folder_id=None):
     @firestore.transactional
     def save(transaction):
         # Todos os documentos são lidos antes de qualquer escrita.
+        folder = None
         if action == "move" and folder_id:
-            _require(user.collection("folders").document(folder_id).get(
+            folder = _require(user.collection("folders").document(folder_id).get(
                 transaction=transaction
             ), "Pasta não encontrada.")
         cards = [_require(ref.get(transaction=transaction),
                           "Uma das cartas não existe no seu portfólio.") for ref in refs]
+        if folder and any(game_of(card) != game_of(folder) for card in cards):
+            raise ValueError("Esta pasta é de outro jogo. Pokémon e Magic ficam em pastas separadas.")
         if action == "reorder":
             # Reordena os itens visíveis entre suas posições atuais. Cartas
             # fora da pasta/busca mantêm suas posições; cópias usam IDs próprios.

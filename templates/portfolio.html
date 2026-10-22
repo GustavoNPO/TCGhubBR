@@ -1,11 +1,13 @@
 {% macro card_details(card) %}
+    {% set variant_labels = {'normal': 'Normal', 'holo': 'Holográfica', 'reverse': 'Holográfica reversa',
+                             'nonfoil': 'Normal (não foil)', 'foil': 'Foil', 'etched': 'Foil etched'} %}
     <div class="detail-identity">
     {% if card.image_url %}
         <img class="detail-image" src="{{ card.image_url }}" alt="{{ card.name }}">
     {% else %}
         <div class="image-placeholder detail-image">Imagem indisponível</div>
     {% endif %}
-        <div><span class="game-label">{{ 'Pokémon' if card.game == 'pokemon' else card.game }} · {{ 'TCGdex' if card.provider == 'tcgdex' else card.provider }}</span>
+        <div><span class="game-label">{{ {'pokemon': 'Pokémon', 'magic': 'Magic'}.get(card.game, card.game) }} · {{ {'tcgdex': 'TCGdex', 'scryfall': 'Scryfall'}.get(card.provider, card.provider) }}</span>
             <h2>{{ card.name }}</h2><p>{{ card.set_name or 'Coleção não informada' }} · #{{ card.collector_number or '?' }}</p></div>
     </div>
     <section class="portfolio-market" aria-label="Referências de preço">
@@ -17,12 +19,13 @@
         <dt>Idioma da carta</dt><dd>{{ language_labels.get(card.language, card.language) }}</dd>
         <dt>Idioma do catálogo</dt><dd>{{ language_labels.get(card.catalog_language, card.catalog_language) }}</dd>
         <dt>Condição</dt><dd>{{ card.condition or 'Não informada' }}</dd>
-        <dt>Variante</dt><dd>{{ {'normal': 'Normal', 'holo': 'Holográfica', 'reverse': 'Holográfica reversa'}.get(card.variant, 'Não informada') }}</dd>
+        <dt>Variante</dt><dd>{{ variant_labels.get(card.variant, 'Não informada') }}</dd>
     </dl>
     <section class="detail-maintenance" aria-label="Organizar carta">
         <label>Pasta <select data-role="card-folder">
             <option value="">Sem pasta</option>
-            {% for folder in folders %}<option value="{{ folder.id }}"{{ ' selected' if card.folder_id == folder.id else '' }}>{{ folder.name }}</option>{% endfor %}
+            {# Só as pastas do mesmo jogo: Pokémon e Magic não se misturam. #}
+            {% for folder in folders if (folder.game or 'pokemon') == (card.game or 'pokemon') %}<option value="{{ folder.id }}"{{ ' selected' if card.folder_id == folder.id else '' }}>{{ folder.name }}</option>{% endfor %}
         </select></label>
         <button type="button" class="secondary-button" data-action="move">Mover carta</button>
         <div class="order-actions"><button type="button" class="secondary-button compact-button" data-action="earlier">← Mover antes</button><button type="button" class="secondary-button compact-button" data-action="later">Mover depois →</button></div>
@@ -48,8 +51,13 @@
             <section class="empty-state" role="alert"><h2>Inventário indisponível</h2><p>{{ error }}</p><a class="button-link" href="{{ url_for('portfolio') }}">Tentar novamente</a></section>
         {% else %}
             <section class="portfolio-toolbar" aria-label="Organização do portfólio">
+                {# Cada jogo é um inventário separado, com as próprias pastas. #}
+                <nav class="game-tabs" aria-label="Jogo">
+                    <button type="button" class="game-tab" data-game="pokemon" aria-pressed="true">Pokémon <span class="game-count"></span></button>
+                    <button type="button" class="game-tab" data-game="magic" aria-pressed="false">Magic <span class="game-count"></span></button>
+                </nav>
                 <div class="folder-bar">
-                    <label>Pasta <select id="folder-filter"><option value="all">Todas as cartas</option><option value="none">Sem pasta</option>{% for folder in folders %}<option value="{{ folder.id }}">{{ folder.name }}</option>{% endfor %}</select></label>
+                    <label>Pasta <select id="folder-filter"><option value="all">Todas as cartas</option><option value="none">Sem pasta</option></select></label>
                     <button type="button" id="new-folder" class="secondary-button">Nova pasta</button>
                     <button type="button" id="rename-folder" class="secondary-button" hidden>Renomear</button>
                     <button type="button" id="share-folder" class="secondary-button" hidden aria-describedby="share-folder-note">Tornar pública</button>
@@ -62,7 +70,7 @@
                 </div>
                 <div class="bulk-bar" id="bulk-bar" hidden>
                     <span id="selection-count"></span>
-                    <label>Destino <select id="bulk-folder"><option value="">Sem pasta</option>{% for folder in folders %}<option value="{{ folder.id }}">{{ folder.name }}</option>{% endfor %}</select></label>
+                    <label>Destino <select id="bulk-folder"><option value="">Sem pasta</option></select></label>
                     <button type="button" id="bulk-move" class="secondary-button">Mover selecionadas</button>
                     <button type="button" id="bulk-delete" class="danger-button">Excluir selecionadas</button>
                     <button type="button" id="clear-selection" class="secondary-button">Limpar seleção</button>

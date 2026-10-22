@@ -18,6 +18,12 @@ const priceDetails = document.querySelector("#price-details");
 const priceSources = document.querySelector("#price-sources");
 const moreButton = document.querySelector("#load-more-cards");
 const conditionInputs = [...entryForm.querySelectorAll('input[name="condition"]')];
+const gameInputs = [...entryForm.querySelectorAll('input[name="game"]')];
+const GAMES = ["pokemon", "magic"];
+const PROVIDERS = { pokemon: "tcgdex", magic: "scryfall" };
+const PLACEHOLDERS = { pokemon: "Nome e número · ex.: Pikachu 025/165", magic: "Nome e número · ex.: Lightning Bolt 149" };
+const FINISH_SHORT = { normal: "Normal", holo: "Holo", reverse: "Reverse", nonfoil: "Normal", foil: "Foil", etched: "Foil etched" };
+let currentGame = "pokemon";
 let selectedCard = null;
 let selectedVariant = null;
 let cardFormRevision = 0;
@@ -31,7 +37,14 @@ let lastPage = 1;
 let hasMore = false;
 let scanLanguage = null;
 let catalogSets = new Map();
+let loadedSetsFor = null;
 const setsByLabel = new Map();
+const labelsById = new Map();
+const setsByGame = new Map();
+
+// TCGdex entrega a base da imagem; o Scryfall entrega as URLs prontas.
+const thumbUrl = (card) => card.thumb_url || (card.image ? `${card.image}/low.webp` : null);
+const largeUrl = (card) => card.image_url || (card.image ? `${card.image}/high.webp` : null);
 
 // Preferências da última carta salva: quem cataloga um fichário não repete idioma e condição.
 const memory = {
@@ -74,7 +87,7 @@ function updateEntryControls() {
     addBar.hidden = !selectedCard;
     addButton.disabled = isSavingCard || !selectedCard || !conditionValue();
     if (selectedCard) {
-        const finish = { normal: "Normal", holo: "Holo", reverse: "Reverse" }[selectedVariant] || "Acabamento ?";
+        const finish = FINISH_SHORT[selectedVariant] || "Acabamento ?";
         const language = cardLanguage.value === "unknown" ? "Idioma ?" : cardLanguage.value.toUpperCase();
         addSummary.replaceChildren(element("strong", `${selectedCard.name} · #${selectedCard.local_id}${selectedCard.set_total ? `/${selectedCard.set_total}` : ""}`),
             element("span", [finish, conditionValue() || "Condição ?", language].join(" · ")));
@@ -124,26 +137,60 @@ queryInput.addEventListener("keydown", (event) => {
     if (event.key === "Enter") { event.preventDefault(); clearTimeout(searchTimer); if (hasSearchCriteria()) searchCatalog(); }
 });
 for (const input of [cardLanguage, ...conditionInputs]) input.addEventListener("change", updateEntryControls);
+for (const input of gameInputs) input.addEventListener("change", () => { if (input.checked && setGame(input.value)) scheduleSearch(); });
 moreButton.addEventListener("click", () => searchCatalog(lastPage + 1));
 
-async function loadSets() {
+/* Cada jogo tem seu catálogo e suas coleções; trocar o jogo limpa o filtro de coleção. */
+function setGame(game) {
+    if (!GAMES.includes(game)) return false;
+    for (const input of gameInputs) input.checked = input.value === game;
+    if (game === currentGame) return false;
+    currentGame = game;
+    memory.set("game", game);
+    queryInput.placeholder = PLACEHOLDERS[game];
+    setInput.value = "";
+    loadSets(game);
+    return true;
+}
+
+function setsFor(game) {
+    if (!setsByGame.has(game)) {
+        const request = fetch(`/api/sets?game=${game}`).then(async (response) => {
+            const data = await response.json();
+            if (!response.ok) throw new Error(data.message);
+            return data.sets;
+        });
+        // Uma falha não fica guardada: a próxima troca de jogo tenta de novo.
+        request.catch(() => setsByGame.delete(game));
+        setsByGame.set(game, request);
+    }
+    return setsByGame.get(game);
+}
+
+async function loadSets(game = currentGame) {
+    catalogSets = new Map(); setsByLabel.clear(); labelsById.clear(); setOptions.replaceChildren();
+    loadedSetsFor = null;
+    setInput.placeholder = "Coleção (opcional) · digite para filtrar";
     try {
-        const response = await fetch("/api/sets");
-        const data = await response.json();
-        if (!response.ok) throw new Error(data.message);
-        catalogSets = new Map(data.sets.map((set) => [set.id, set]));
-        const sets = [...data.sets].sort((a, b) => a.name.localeCompare(b.name, "pt-BR"));
+        const data = await setsFor(game);
+        if (game !== currentGame || loadedSetsFor === game) return;
+        loadedSetsFor = game;
+        catalogSets = new Map(data.map((set) => [set.id, set]));
+        const sets = [...data].sort((a, b) => a.name.localeCompare(b.name, "pt-BR"));
         for (const set of sets) {
             const names = [...new Set([set.names?.pt, set.names?.en, set.name].filter(Boolean))];
-            const label = `${names.join(" / ")}${set.official ? ` · /${set.official}` : ""}`;
+            // Magic: o código impresso na carta (M11, DMU) é como o jogador reconhece a coleção.
+            const suffix = game === "magic" ? ` (${set.id.toUpperCase()})` : set.official ? ` · /${set.official}` : "";
+            const label = `${names.join(" / ")}${suffix}`;
             const option = document.createElement("option");
             option.value = label;
             setOptions.append(option);
+            labelsById.set(set.id, label);
             // Aceita o rótulo sugerido, qualquer um dos nomes ou o código da coleção.
             for (const key of [label, ...names, set.id]) setsByLabel.set(key.toLocaleLowerCase("pt-BR"), set.id);
         }
     } catch {
-        setInput.placeholder = "Coleções indisponíveis · busque pelo nome e número";
+        if (game === currentGame) setInput.placeholder = "Coleções indisponíveis · busque pelo nome e número";
     }
 }
 
@@ -151,6 +198,7 @@ async function searchCatalog(page = 1, scanCandidates = []) {
     if (isSavingCard) return;
     const { name, number } = parseQuery(queryInput.value);
     const setId = currentSetId();
+    const game = currentGame;
     cardFormRevision += 1;
     const requestId = ++catalogRequest;
     searchController?.abort();
@@ -159,7 +207,7 @@ async function searchCatalog(page = 1, scanCandidates = []) {
     if (page === 1) clearSelection();
     moreButton.hidden = true;
     entryFeedback.textContent = "Buscando cartas físicas em português e inglês…";
-    const params = new URLSearchParams({ name: name.length >= 2 ? name : "", collector_number: number, catalog_language: "auto", set_id: setId, page });
+    const params = new URLSearchParams({ game, name: name.length >= 2 ? name : "", collector_number: number, catalog_language: "auto", set_id: setId, page });
     try {
         const response = await fetch(`/api/cards/search?${params}`, { signal: controller.signal });
         const data = await response.json();
@@ -169,6 +217,7 @@ async function searchCatalog(page = 1, scanCandidates = []) {
         hasMore = Boolean(data.has_more);
         let cards = data.candidates;
         if (page === 1 && !cards.length && scanCandidates.length) cards = scanCandidates;
+        cards = cards.map((card) => ({ ...card, game: card.game || game }));
         showCardCandidates(cards, page > 1);
         moreButton.hidden = !hasMore;
         if (!lastCandidates.length) {
@@ -189,15 +238,24 @@ async function searchCatalog(page = 1, scanCandidates = []) {
     }
 }
 
-function receiveScanResult(data, revision) {
+async function receiveScanResult(data, revision) {
     if (revision !== cardFormRevision || selectedCard || isSavingCard) {
         entryFeedback.textContent = "Foto lida; mantivemos a busca que você digitou.";
         return;
     }
     const detected = data.detected || {};
-    if (detected.game && detected.game !== "pokemon") {
+    if (detected.game && !GAMES.includes(detected.game)) {
         entryFeedback.textContent = data.message || "O catálogo desse jogo ainda não está disponível.";
         return;
+    }
+    // A foto decide o jogo: uma carta de Magic vai para o catálogo de Magic.
+    if (detected.game) setGame(detected.game);
+    if (currentGame === "magic" && detected.set_code) {
+        // O código da coleção impresso na carta deixa a busca exata.
+        const code = detected.set_code.trim().toLowerCase();
+        try { await setsFor("magic"); } catch { /* busca sem o filtro de coleção */ }
+        if (revision !== cardFormRevision || selectedCard || isSavingCard || currentGame !== "magic") return;
+        setInput.value = labelsById.get(code) || "";
     }
     scanLanguage = [...cardLanguage.options].some((option) => option.value === detected.language) && detected.language !== "unknown"
         ? detected.language : null;
@@ -225,9 +283,9 @@ function showCardCandidates(cards, append = false) {
         const candidate = element("button", undefined, "candidate");
         candidate.type = "button";
         candidate.dataset.cardId = card.id;
-        if (card.image) {
+        if (thumbUrl(card)) {
             const image = document.createElement("img");
-            image.src = `${card.image}/low.webp`; image.alt = ""; image.loading = "lazy";
+            image.src = thumbUrl(card); image.alt = ""; image.loading = "lazy";
             candidate.append(image);
         } else candidate.append(element("span", "Sem imagem", "image-placeholder"));
         candidate.append(element("span", card.name, "candidate-name"), element("span", cardLabel(card), "candidate-set"));
@@ -263,9 +321,9 @@ function updateToggle() {
 
 function renderChosenCard() {
     chosenImage.replaceChildren();
-    if (selectedCard.image) {
+    if (largeUrl(selectedCard)) {
         const image = document.createElement("img");
-        image.src = `${selectedCard.image}/high.webp`; image.alt = selectedCard.name;
+        image.src = largeUrl(selectedCard); image.alt = selectedCard.name;
         chosenImage.append(image);
     } else chosenImage.append(element("div", "Sem imagem", "image-placeholder"));
     chosenIdentity.replaceChildren(element("h3", selectedCard.name), element("p", cardLabel(selectedCard)));
@@ -301,14 +359,14 @@ async function refreshPrices() {
     finishList.replaceChildren(element("p", "Consultando referências…", "price-note"));
     ligaPanel.replaceChildren();
     priceDetails.hidden = true;
-    const params = new URLSearchParams({ catalog_language: card.language || "en" });
+    const params = new URLSearchParams({ game: card.game, catalog_language: card.language || "en" });
     try {
         const response = await fetch(`/api/cards/${encodeURIComponent(card.id)}/prices?${params}`);
         const data = await response.json();
         if (requestId !== priceRequest) return;
         if (data.card) {
             const metadata = data.card;
-            Object.assign(selectedCard, { image: metadata.image || card.image, set_name: metadata.set_name || card.set_name,
+            Object.assign(selectedCard, { image: metadata.image || card.image, image_url: metadata.image_url || card.image_url, set_name: metadata.set_name || card.set_name,
                 local_id: metadata.local_id || card.local_id, set_total: metadata.set_total || card.set_total });
             renderChosenCard();
         }
@@ -333,7 +391,7 @@ entryForm.addEventListener("submit", async (event) => {
     if (isSavingCard || !selectedCard || !conditionValue()) return;
     const card = selectedCard;
     const payload = {
-        game: "pokemon", provider: "tcgdex", external_id: card.id,
+        game: card.game, provider: PROVIDERS[card.game], external_id: card.id,
         catalog_language: card.language || "en", language: cardLanguage.value,
         collector_number: String(card.local_id || ""),
         condition: conditionValue(), variant: selectedVariant
@@ -368,5 +426,9 @@ entryForm.addEventListener("submit", async (event) => {
 });
 
 setLanguage(memory.get("language"));
+// Quem cataloga um fichário de Magic continua no Magic na próxima visita.
+currentGame = memory.get("game") === "magic" ? "magic" : "pokemon";
+for (const input of gameInputs) input.checked = input.value === currentGame;
+queryInput.placeholder = PLACEHOLDERS[currentGame];
 updateEntryControls();
 loadSets();

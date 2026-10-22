@@ -541,3 +541,10 @@ button:not(:disabled):active, .button-link:active, .camera-button:active { trans
     .public-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
     .auth-card { padding: 16px; }
 }
+
+/* Jogo: Pokémon e Magic são inventários separados */
+.game-switch span { min-width: 92px; }
+.game-tabs { display: flex; gap: 6px; margin-bottom: 16px; padding-bottom: 16px; border-bottom: 1px solid #475569; }
+.portfolio-toolbar .game-tab { flex: 1; display: inline-flex; justify-content: center; align-items: center; gap: 8px; padding: 10px 14px; border: 1px solid var(--line-strong); border-radius: 12px; background: var(--surface-2); color: var(--text); font-weight: 800; }
+.portfolio-toolbar .game-tab[aria-pressed="true"] { border-color: var(--accent); background: var(--accent); color: white; }
+.game-count { min-width: 22px; padding: 1px 7px; border-radius: 999px; background: #0000002e; font-size: .75rem; }
