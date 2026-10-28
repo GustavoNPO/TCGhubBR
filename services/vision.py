@@ -93,7 +93,15 @@ class CardExtraction(BaseModel):
     )
 
 
-client = genai.Client()
+_client = None
+
+
+def get_client():
+    # Criado no primeiro scan: o resto do app funciona mesmo sem GEMINI_API_KEY.
+    global _client
+    if _client is None:
+        _client = genai.Client()
+    return _client
 
 
 PROMPT = """
@@ -206,8 +214,31 @@ Only provide search_name when you are confident about it.
 """
 
 
+class InvalidImage(ValueError):
+    pass
+
+
+# Uma foto de celular tem ~50 MP; acima disso tratamos como "bomba de descompressão".
+Image.MAX_IMAGE_PIXELS = 60_000_000
+ALLOWED_FORMATS = {"JPEG", "PNG", "WEBP", "MPO"}
+
+
 def prepare_image(image_bytes):
-    image = Image.open(BytesIO(image_bytes))
+    # O tipo informado pelo navegador não vale: conferimos o conteúdo real.
+    try:
+        image = Image.open(BytesIO(image_bytes))
+        if image.format not in ALLOWED_FORMATS:
+            raise InvalidImage("Formato de imagem não suportado.")
+        # O Pillow só recusa sozinho acima do dobro do limite; conferimos antes de decodificar.
+        if image.width * image.height > Image.MAX_IMAGE_PIXELS:
+            raise Image.DecompressionBombError("imagem acima do limite")
+        image.load()
+    except InvalidImage:
+        raise
+    except Image.DecompressionBombError as error:
+        raise InvalidImage("Imagem grande demais. Envie uma foto de até 60 megapixels.") from error
+    except (OSError, SyntaxError, ValueError) as error:
+        raise InvalidImage("Não foi possível ler a imagem. Envie uma foto JPEG, PNG ou WEBP.") from error
 
     # Corrige fotos que vieram giradas do celular.
     image = ImageOps.exif_transpose(image)
@@ -235,7 +266,7 @@ def extract_card_info(image_bytes):
         prepared_image
     ).decode("utf-8")
 
-    interaction = client.interactions.create(
+    interaction = get_client().interactions.create(
         model="gemini-3.5-flash-lite",
 
         input=[

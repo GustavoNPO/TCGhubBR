@@ -3,6 +3,7 @@
     {% if current_user %}
     <a href="{{ url_for('home') }}"{{ ' aria-current="page"'|safe if active == 'home' else '' }}>Adicionar carta</a>
     <a href="{{ url_for('portfolio') }}"{{ ' aria-current="page"'|safe if active == 'portfolio' else '' }}>Meu portfólio</a>
+     <a href="{{ url_for('chat_page') }}"{{ ' aria-current="page"'|safe if active == 'chat' else '' }}>Conversas</a>
     <span class="nav-spacer" aria-hidden="true"></span>
     <a class="nav-user" href="{{ url_for('profile_page') }}"{{ ' aria-current="page"'|safe if active == 'profile' else '' }}>
         <span class="avatar" aria-hidden="true">{{ ((current_user.name or current_user.email or '?')|trim)[:1]|upper }}</span>

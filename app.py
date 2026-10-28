@@ -5,6 +5,8 @@ from urllib.parse import urlparse
 
 import requests
 from flask import Flask, g, jsonify, redirect, render_template, request, url_for
+from werkzeug.exceptions import HTTPException
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 from services.tcgdex import (
     find_card_candidates,
@@ -37,8 +39,11 @@ from services.portfolio import (
 )
 from services.auth import (
     SESSION_COOKIE, SESSION_DURATION, AuthError, create_client_token, create_session, forget_session,
-    revoke_sessions, verify_session
+    is_email_verified, revoke_sessions, verify_session
 )
+from services.chat import ChatError, ChatNotFound, mark_read, open_conversation, send_message
+from services.ratelimit import RateLimited, RateLimiter
+from services.vision import InvalidImage, extract_card_info
 from services.accounts import (
     AccountError, clean_profile_update, ensure_account, find_profile_by_handle,
     get_profile, public_view, update_profile
@@ -50,11 +55,25 @@ from services.ligapokemon import CARD_CONDITIONS, liga_link_for_card
 from services.pricing import get_international_prices, get_mtg_international_prices, PRICING_VERSION
 
 app = Flask(__name__)
+PRODUCTION = os.getenv("APP_ENV", "development") == "production"
 # Só para desenvolvimento local e testes: entra direto como este uid, sem login.
 # Nunca configure em um servidor acessível por outras pessoas.
 app.config["DEV_AUTH_USER_ID"] = os.getenv("DEV_AUTH_USER_ID") or None
 # "auto" marca o cookie como Secure quando a requisição chega por HTTPS.
-app.config["SESSION_COOKIE_SECURE_MODE"] = os.getenv("SESSION_COOKIE_SECURE", "auto")
+app.config["SESSION_COOKIE_SECURE_MODE"] = os.getenv("SESSION_COOKIE_SECURE") or ("1" if PRODUCTION else "auto")
+if PRODUCTION:
+    # Um .env de desenvolvimento copiado para o servidor deixaria qualquer visitante entrar como esse uid.
+    if app.config["DEV_AUTH_USER_ID"]:
+        raise RuntimeError("DEV_AUTH_USER_ID não pode ser usado com APP_ENV=production.")
+    # Atrás do nginx: o IP, o HTTPS e o host reais vêm dos cabeçalhos do proxy local.
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
+# Domínios aceitos no cabeçalho Host (ex.: "tcghub.com.br,www.tcghub.com.br"); vazio aceita qualquer um.
+app.config["TRUSTED_HOSTS"] = [host.strip() for host in os.getenv("APP_HOSTS", "").split(",") if host.strip()] or None
+# Fotos do scan; o nginx usa o mesmo teto (client_max_body_size).
+app.config["MAX_CONTENT_LENGTH"] = 10 * 1024 * 1024
+# Cada scan chama o Gemini (custo por chamada): teto por pessoa e por hora.
+scan_limit = RateLimiter(int(os.getenv("SCAN_LIMIT_PER_HOUR", "40")), 3600,
+                         "Você atingiu o limite de scans por hora. Use a busca por nome ou tente mais tarde.")
 _project_id = os.getenv("FIREBASE_PROJECT_ID")
 app.config["FIREBASE_WEB_CONFIG"] = {
     "apiKey": os.getenv("FIREBASE_WEB_API_KEY"),
@@ -231,6 +250,59 @@ def handle_auth_required(_error):
     return redirect(login_url)
 
 
+def wants_json():
+    return request.path.startswith("/api/") or request.path == "/scan"
+
+
+@app.errorhandler(RateLimited)
+def handle_rate_limited(error):
+    response = jsonify(status="error", error=str(error))
+    response.headers["Retry-After"] = str(error.retry_after)
+    return response, 429
+
+
+HTTP_MESSAGES = {
+    400: "Requisição inválida.", 404: "Endereço não encontrado.", 405: "Operação não permitida.",
+    413: "Arquivo grande demais. Envie uma foto de até 10 MB.", 429: "Muitas requisições. Aguarde um instante."
+}
+
+
+@app.errorhandler(HTTPException)
+def handle_http_error(error):
+    # Na API, erros (inclusive os não tratados, que viram 500) saem em JSON e sem detalhes internos.
+    if not wants_json():
+        return error
+    message = HTTP_MESSAGES.get(error.code, "Não foi possível concluir a operação. Tente novamente.")
+    return jsonify(status="error", error=message), error.code
+
+
+# O app não usa scripts inline: só arquivos próprios e os SDKs do Firebase/Google.
+# Imagens, conexões e iframes ficam livres (catálogos, avatares e login do Firebase).
+CONTENT_SECURITY_POLICY = "; ".join((
+    "script-src 'self' https://www.gstatic.com https://apis.google.com https://www.google.com/recaptcha/",
+    "object-src 'none'", "base-uri 'self'", "form-action 'self'", "frame-ancestors 'none'"
+))
+
+
+@app.after_request
+def security_headers(response):
+    headers = response.headers
+    headers.setdefault("Content-Security-Policy", CONTENT_SECURITY_POLICY)
+    headers.setdefault("X-Content-Type-Options", "nosniff")
+    headers.setdefault("X-Frame-Options", "DENY")
+    headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    headers.setdefault("Permissions-Policy", "geolocation=(), microphone=(), payment=(), usb=()")
+    if wants_json():
+        headers.setdefault("Cache-Control", "no-store")
+    return response
+
+
+@app.get("/healthz")
+def healthz():
+    """Para o nginx/monitoramento: o processo responde, sem tocar em Firebase ou Gemini."""
+    return jsonify(status="ok")
+
+
 def login_required(function):
     @wraps(function)
     def handle(*args, **kwargs):
@@ -367,6 +439,85 @@ def public_profile(handle):
         # Perfil privado e inexistente respondem igual: não revelamos quem tem conta.
         return render_template("public_profile.html", view=None, error=None), 404
     return render_template("public_profile.html", view=view, error=None, language_labels=LANGUAGE_LABELS)
+
+
+def chat_blocker():
+    """Motivo para a pessoa ainda não poder conversar, ou None."""
+    if g.user.get("dev"):
+        return "O chat precisa de uma conta real. Entre com e-mail ou Google."
+    if not g.user.get("email_verified") and not is_email_verified(g.user["uid"]):
+        return "Confirme seu e-mail pelo link que enviamos para conversar com outros colecionadores."
+    return None
+
+
+@app.get("/conversas")
+@login_required
+def chat_page():
+    config = app.config["FIREBASE_WEB_CONFIG"]
+    try:
+        blocker = chat_blocker()
+    except Exception:
+        app.logger.exception("Erro ao verificar conta para o chat")
+        blocker = "Não foi possível abrir as conversas agora. Tente novamente."
+    if not blocker and not (config.get("apiKey") and config.get("projectId")):
+        blocker = "Chat indisponível: o Firebase do navegador não está configurado."
+    return render_template("chat.html", firebase_config=config, blocker=blocker,
+                           me={"uid": g.user["uid"]}, selected=request.args.get("c", ""))
+
+
+def chat_api(function):
+    @wraps(function)
+    @login_required
+    def handle(*args, **kwargs):
+        try:
+            blocker = chat_blocker()
+            if blocker:
+                return jsonify(status="error", error=blocker), 403
+            return function(*args, **kwargs)
+        except RateLimited:
+            raise
+        except ChatNotFound as error:
+            return jsonify(status="error", error=str(error)), 404
+        except ChatError as error:
+            return jsonify(status="error", error=str(error)), 400
+        except FirebaseUnavailable as error:
+            return jsonify(status="error", error=str(error)), 503
+        except Exception:
+            app.logger.exception("Erro no chat")
+            return jsonify(status="error", error="Não foi possível concluir a operação. Tente novamente."), 503
+    return handle
+
+
+@app.post("/api/chat/conversations")
+@chat_api
+def start_conversation():
+    data = request.get_json(silent=True)
+    handle = data.get("handle") if isinstance(data, dict) else None
+    other = find_profile_by_handle(handle) if isinstance(handle, str) else None
+    # Só perfis públicos recebem conversas novas; privado e inexistente respondem igual.
+    if not other or other.get("profile_visibility") != "public":
+        raise ChatNotFound("Perfil não encontrado.")
+    profile = get_profile(g.user["uid"])
+    if not profile:
+        raise ChatError("Entre novamente para criar seu perfil.")
+    conversation = open_conversation(profile, other)
+    return jsonify(status="ok", conversation_id=conversation, url=url_for("chat_page", c=conversation))
+
+
+@app.post("/api/chat/conversations/<conversation>/messages")
+@chat_api
+def post_message(conversation):
+    data = request.get_json(silent=True)
+    message_id = send_message(g.user["uid"], conversation, data.get("text") if isinstance(data, dict) else None)
+    return jsonify(status="ok", message_id=message_id), 201
+
+
+@app.post("/api/chat/conversations/<conversation>/read")
+@chat_api
+def read_conversation(conversation):
+    mark_read(g.user["uid"], conversation)
+    return jsonify(status="ok")
+
 
 @app.get("/portfolio")
 @login_required
@@ -682,10 +833,6 @@ def create_mtg_portfolio_card(external_id, language, collector_number, condition
     return jsonify(status="ok", card_id=card_id, redirect_url=url_for("portfolio", game="magic")), 201
 
 
-# Limite máximo de upload: 10 MB
-app.config["MAX_CONTENT_LENGTH"] = 10 * 1024 * 1024
-
-
 ALLOWED_IMAGE_TYPES = {
     "image/jpeg",
     "image/png",
@@ -738,6 +885,7 @@ def scan():
         }), 400
 
 
+    scan_limit.hit(get_current_user_id())
     image_bytes = image.read()
 
 
@@ -756,9 +904,6 @@ def scan():
         # =========================
         # 3. GEMINI ANALISA A CARTA
         # =========================
-
-        # Cadastro manual funciona mesmo sem configurar o cliente Gemini.
-        from services.vision import extract_card_info
 
         print("Enviando imagem para o Gemini...")
 
@@ -919,6 +1064,11 @@ def scan():
         })
 
 
+    except InvalidImage as error:
+
+        return jsonify({"status": "error", "error": str(error)}), 400
+
+
     except Exception as error:
 
         print("\nERRO DURANTE O SCAN:")
@@ -938,6 +1088,10 @@ def scan():
 
 
 if __name__ == "__main__":
+
+    # Servidor de desenvolvimento. Em produção quem roda o app é o gunicorn (deploy/).
+    if PRODUCTION:
+        raise SystemExit("Em produção use o gunicorn: veja docs/deploy-oracle-cloud.md.")
 
     app.run(
         host="0.0.0.0",

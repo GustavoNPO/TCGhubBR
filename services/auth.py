@@ -18,7 +18,9 @@ SESSION_DURATION = timedelta(days=5)
 RECENT_SIGN_IN_SECONDS = 5 * 60
 VERIFY_CACHE_SECONDS = 5 * 60
 _verified = {}
+_email_verified = set()
 _verify_lock = Lock()
+
 
 
 class AuthError(ValueError):
@@ -90,6 +92,20 @@ def revoke_sessions(uid):
     with _verify_lock:
         for key in [key for key, (_, claims) in _verified.items() if claims.get("uid") == uid]:
             _verified.pop(key, None)
+
+def is_email_verified(uid):
+    """Estado atual da conta: o cookie guarda o do login, antes de clicar no link."""
+    if uid in _email_verified:
+        return True
+    auth, app = _auth()
+    verified = bool(auth.get_user(uid, app=app).email_verified)
+    if verified:
+        # Confirmação não volta atrás; guardamos só o "sim" para não consultar a cada mensagem.
+        with _verify_lock:
+            if len(_email_verified) >= 4096:
+                _email_verified.pop()
+            _email_verified.add(uid)
+    return verified
 
 
 def create_client_token(uid):

@@ -1,7 +1,9 @@
-Flask
-python-dotenv
-requests
-google-genai
-pydantic
-Pillow
-firebase-admin
+Flask==3.1.2
+Werkzeug==3.1.4
+python-dotenv==1.2.4
+requests==2.34.2
+google-genai==2.29.0
+pydantic==2.13.4
+Pillow==12.2.0
+firebase-admin==7.7.0
+gunicorn==23.0.0

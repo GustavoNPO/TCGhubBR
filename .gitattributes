@@ -1,0 +1,4 @@
+# Arquivos que rodam no servidor Linux precisam de LF, mesmo editados no Windows.
+*.sh text eol=lf
+deploy/* text eol=lf
+firestore.rules text eol=lf

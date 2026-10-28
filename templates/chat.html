@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Conversas · TCG Hub</title>
+    <meta name="robots" content="noindex">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <main class="container chat-container">
+        {% with active='chat' %}{% include '_nav.html' %}{% endwith %}
+        {% if blocker %}
+            <section class="empty-state" role="alert"><h2>Conversas indisponíveis</h2><p>{{ blocker }}</p>
+                <a class="button-link compact-button" href="{{ url_for('profile_page') }}">Ir para o perfil</a></section>
+        {% else %}
+        <div class="chat-layout" data-view="{{ 'thread' if selected else 'list' }}">
+            <section class="chat-list" aria-labelledby="chat-heading">
+                <h1 id="chat-heading">Conversas</h1>
+                <p id="chat-status" class="field-note" role="status">Conectando…</p>
+                <ul id="conversation-list"></ul>
+            </section>
+
+            <section class="chat-thread" aria-label="Conversa aberta">
+                <div id="thread-empty" class="chat-thread-empty"><p>Escolha uma conversa para ler as mensagens.</p></div>
+                <div id="thread" class="chat-thread-body" hidden>
+                    <header class="chat-thread-header">
+                        <button type="button" id="thread-back" class="secondary-button compact-button" aria-label="Voltar às conversas">←</button>
+                        <span id="thread-avatar" class="avatar" aria-hidden="true"></span>
+                        <div>
+                            <h2 id="thread-name"></h2>
+                            <a id="thread-handle" href="#"></a>
+                        </div>
+                    </header>
+                    <ol id="message-list" class="message-list" aria-live="polite"></ol>
+                    <form id="message-form" class="message-form">
+                        <label for="message-text" class="visually-hidden">Mensagem</label>
+                        <textarea id="message-text" rows="1" maxlength="1000" placeholder="Escreva uma mensagem" required></textarea>
+                        <button type="submit" id="message-send">Enviar</button>
+                    </form>
+                    <p id="message-feedback" class="field-note" role="status"></p>
+                </div>
+            </section>
+        </div>
+        <script id="firebase-config" type="application/json">{{ firebase_config|tojson }}</script>
+        <script id="chat-context" type="application/json">{{ {'uid': me.uid, 'selected': selected}|tojson }}</script>
+        {% endif %}
+    </main>
+    <script src="{{ url_for('static', filename='js/session.js') }}"></script>
+    {% if not blocker %}<script type="module" src="{{ url_for('static', filename='js/chat.js') }}"></script>{% endif %}
+</body>
+</html>

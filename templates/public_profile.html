@@ -29,8 +29,11 @@
                     <p>@{{ profile.handle }} · {{ view.cards|length }} {{ 'carta visível' if view.cards|length == 1 else 'cartas visíveis' }}</p>
                     {% if profile.bio %}<p class="profile-bio">{{ profile.bio }}</p>{% endif %}
                 </div>
-                {% if view.is_owner %}<a class="button-link compact-button" href="{{ url_for('profile_page') }}">Editar perfil</a>{% endif %}
+                {% if view.is_owner %}<a class="button-link compact-button" href="{{ url_for('profile_page') }}">Editar perfil</a>
+                {% elif not current_user %}<a class="button-link compact-button" href="{{ url_for('login_page', next=request.path) }}">Entrar para conversar</a>
+                {% elif profile.profile_visibility == 'public' %}<button type="button" class="compact-button" data-start-chat="{{ profile.handle }}">Conversar</button>{% endif %}
             </header>
+            <p id="chat-feedback" class="price-warning" role="status"></p>
 
             {% if view.folders %}
             <nav class="folder-chips" aria-label="Coleções compartilhadas">
@@ -49,7 +52,6 @@
                     <p class="public-card-tags">
                           <span>{{ 'Magic' if card.game == 'magic' else 'Pokémon' }}</span>
                         {% if card.variant %}<span>{{ {'normal': 'Normal', 'holo': 'Holo', 'reverse': 'Reverse', 'nonfoil': 'Normal', 'foil': 'Foil', 'etched': 'Foil etched'}.get(card.variant, card.variant) }}</span>{% endif %}
-                        {% if card.variant %}<span>{{ {'normal': 'Normal', 'holo': 'Holo', 'reverse': 'Reverse'}.get(card.variant, card.variant) }}</span>{% endif %}
                         {% if card.condition %}<span>{{ card.condition }}</span>{% endif %}
                         {% if card.language and card.language != 'unknown' %}<span>{{ card.language|upper }}</span>{% endif %}
                         {% if card.for_trade %}<span class="tag-trade">Para troca</span>{% endif %}
@@ -65,14 +67,6 @@
         {% endif %}
     </main>
     <script src="{{ url_for('static', filename='js/session.js') }}"></script>
-    <script>
-        // Filtro por coleção compartilhada, sem recarregar a página.
-        document.querySelector(".folder-chips")?.addEventListener("click", (event) => {
-            const chip = event.target.closest("[data-folder]");
-            if (!chip) return;
-            for (const other of document.querySelectorAll(".chip-button")) other.setAttribute("aria-pressed", String(other === chip));
-            for (const card of document.querySelectorAll(".public-card")) card.hidden = Boolean(chip.dataset.folder) && card.dataset.folder !== chip.dataset.folder;
-        });
-    </script>
+    <script src="{{ url_for('static', filename='js/public-profile.js') }}"></script>
 </body>
 </html>

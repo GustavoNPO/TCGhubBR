@@ -1,0 +1,32 @@
+# /etc/systemd/system/tcghub.service
+[Unit]
+Description=TCG Hub (gunicorn)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=tcghub
+Group=tcghub
+WorkingDirectory=/srv/tcghub/app
+EnvironmentFile=/etc/tcghub/tcghub.env
+ExecStart=/srv/tcghub/venv/bin/gunicorn -c deploy/gunicorn.conf.py app:app
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=3
+
+# Isolamento: o app não grava em disco, não ganha privilégios e não vê /home.
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
